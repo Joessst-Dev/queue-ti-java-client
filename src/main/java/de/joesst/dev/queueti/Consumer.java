@@ -4,6 +4,8 @@ import com.google.common.util.concurrent.ListenableFuture;
 import com.google.common.util.concurrent.MoreExecutors;
 import de.joesst.dev.queueti.pb.AckRequest;
 import de.joesst.dev.queueti.pb.AckResponse;
+import de.joesst.dev.queueti.pb.BatchDequeueRequest;
+import de.joesst.dev.queueti.pb.DequeueResponse;
 import de.joesst.dev.queueti.pb.NackRequest;
 import de.joesst.dev.queueti.pb.NackResponse;
 import de.joesst.dev.queueti.pb.QueueServiceGrpc;
@@ -12,7 +14,11 @@ import de.joesst.dev.queueti.pb.SubscribeResponse;
 import io.grpc.stub.StreamObserver;
 
 import java.time.Duration;
+import java.util.ArrayList;
+import java.util.Collections;
+import java.util.HashSet;
 import java.util.List;
+import java.util.Set;
 import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.CountDownLatch;
 import java.util.concurrent.ExecutionException;
@@ -132,15 +138,141 @@ public final class Consumer {
     }
 
     /**
-     * Stub for the batch-consume mode.
+     * Starts the batch-polling consumer loop, delivering each batch of messages to
+     * {@code handler}.
      *
-     * @param batchSize maximum number of messages to deliver per batch
-     * @param handler   handler invoked with each batch
-     * @throws UnsupportedOperationException always — not yet implemented
+     * <p>This method blocks until the calling thread is interrupted. On each poll it
+     * requests up to {@code batchSize} messages from the server. When the server returns
+     * an empty batch, the consumer backs off using exponential backoff starting at
+     * {@value #BACKOFF_START_MS} ms and capped at {@value #BACKOFF_MAX_SECS} s.
+     * Backoff resets to the starting value immediately after a non-empty batch is received.
+     *
+     * <p>If {@code handler} throws any {@link Throwable}, every message in the batch that
+     * has not already been nacked is nacked with the throwable's message as the reason.
+     *
+     * @param batchSize maximum number of messages to request per poll; must be {@code >= 1}
+     * @param handler   handler invoked with each non-empty batch; must not be {@code null}
+     * @throws IllegalArgumentException if {@code batchSize < 1}
      */
     public void consumeBatch(final int batchSize, final BatchMessageHandler handler) {
-        // TODO: Phase 10
-        throw new UnsupportedOperationException("consumeBatch is not yet implemented (Phase 10)");
+        if (batchSize < 1) {
+            throw new IllegalArgumentException("batchSize must be >= 1");
+        }
+
+        Duration backoff = BACKOFF_START;
+        while (!Thread.currentThread().isInterrupted()) {
+            final BatchDequeueRequest.Builder req = BatchDequeueRequest.newBuilder()
+                    .setTopic(topic)
+                    .setCount(batchSize)
+                    .setConsumerGroup(options.getConsumerGroup());
+            if (options.getVisibilityTimeoutSeconds() != null) {
+                req.setVisibilityTimeoutSeconds(options.getVisibilityTimeoutSeconds());
+            }
+
+            final List<DequeueResponse> rawMessages;
+            try {
+                rawMessages = futureStub.batchDequeue(req.build()).get().getMessagesList();
+            } catch (InterruptedException e) {
+                Thread.currentThread().interrupt();
+                return;
+            } catch (ExecutionException e) {
+                logger.warning("queue-ti consumer: batchDequeue error (retrying in "
+                        + backoff + "): " + e.getCause());
+                sleep(backoff);
+                backoff = nextBackoff(backoff);
+                continue;
+            }
+
+            if (rawMessages.isEmpty()) {
+                sleep(backoff);
+                backoff = nextBackoff(backoff);
+                continue;
+            }
+
+            backoff = BACKOFF_START;
+
+            // Build Message list with ack/nack closures wired to this batch.
+            // ackedIds and nackedIds track explicit calls so the post-handler auto-ack/nack
+            // loop can skip messages the handler already settled.
+            final List<Message> messages = new ArrayList<>(rawMessages.size());
+            final Set<String> ackedIds  = Collections.synchronizedSet(new HashSet<>());
+            final Set<String> nackedIds = Collections.synchronizedSet(new HashSet<>());
+            for (final DequeueResponse raw : rawMessages) {
+                final String msgId = raw.getId();
+
+                final Supplier<CompletableFuture<Void>> ackFn = () -> {
+                    ackedIds.add(msgId);
+                    final CompletableFuture<Void> cf = new CompletableFuture<>();
+                    final ListenableFuture<AckResponse> lf = futureStub.ack(
+                            AckRequest.newBuilder()
+                                    .setId(msgId)
+                                    .setConsumerGroup(options.getConsumerGroup())
+                                    .build());
+                    lf.addListener(() -> {
+                        try {
+                            lf.get();
+                            cf.complete(null);
+                        } catch (ExecutionException e) {
+                            cf.completeExceptionally(e.getCause());
+                        } catch (InterruptedException e) {
+                            Thread.currentThread().interrupt();
+                            cf.completeExceptionally(e);
+                        }
+                    }, MoreExecutors.directExecutor());
+                    return cf;
+                };
+
+                final Function<String, CompletableFuture<Void>> nackFn = reason -> {
+                    nackedIds.add(msgId);
+                    final CompletableFuture<Void> cf = new CompletableFuture<>();
+                    final ListenableFuture<NackResponse> lf = futureStub.nack(
+                            NackRequest.newBuilder()
+                                    .setId(msgId)
+                                    .setError(reason)
+                                    .setConsumerGroup(options.getConsumerGroup())
+                                    .build());
+                    lf.addListener(() -> {
+                        try {
+                            lf.get();
+                            cf.complete(null);
+                        } catch (ExecutionException e) {
+                            cf.completeExceptionally(e.getCause());
+                        } catch (InterruptedException e) {
+                            Thread.currentThread().interrupt();
+                            cf.completeExceptionally(e);
+                        }
+                    }, MoreExecutors.directExecutor());
+                    return cf;
+                };
+
+                messages.add(Message.fromDequeueResponse(raw, ackFn, nackFn));
+            }
+
+            try {
+                handler.handle(messages);
+                // Auto-ack any message the handler did not explicitly ack or nack.
+                for (final Message msg : messages) {
+                    if (!ackedIds.contains(msg.id()) && !nackedIds.contains(msg.id())) {
+                        msg.ack().whenComplete((v, err) -> {
+                            if (err != null) {
+                                logger.warning("queue-ti consumer: batch ack failed: " + err);
+                            }
+                        });
+                    }
+                }
+            } catch (Throwable t) {
+                final String reason = t.getMessage() != null ? t.getMessage() : t.getClass().getName();
+                for (final Message msg : messages) {
+                    if (!nackedIds.contains(msg.id())) {
+                        msg.nack(reason).whenComplete((v, err) -> {
+                            if (err != null) {
+                                logger.warning("queue-ti consumer: batch nack failed: " + err);
+                            }
+                        });
+                    }
+                }
+            }
+        }
     }
 
     // -------------------------------------------------------------------------
@@ -316,6 +448,19 @@ public final class Consumer {
                             + msg.id() + ": " + err);
                 }
             });
+        }
+    }
+
+    /**
+     * Sleeps for the specified duration, re-interrupting the thread if interrupted.
+     *
+     * @param d the duration to sleep; negative or zero values are silently ignored
+     */
+    private void sleep(final Duration d) {
+        try {
+            Thread.sleep(d);
+        } catch (InterruptedException e) {
+            Thread.currentThread().interrupt();
         }
     }
 
