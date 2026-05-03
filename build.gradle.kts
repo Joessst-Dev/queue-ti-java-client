@@ -36,6 +36,7 @@ dependencies {
     testRuntimeOnly("org.junit.platform:junit-platform-launcher")
     testImplementation("io.grpc:grpc-inprocess:$grpcVersion")
     testImplementation("io.grpc:grpc-testing:$grpcVersion")
+    testImplementation("org.assertj:assertj-core:3.26.3")
 }
 
 protobuf {
