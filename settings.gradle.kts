@@ -1,0 +1,1 @@
+rootProject.name = "queue-ti-java-client"
