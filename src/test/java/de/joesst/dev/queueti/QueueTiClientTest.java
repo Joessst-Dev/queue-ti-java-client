@@ -16,7 +16,6 @@ import java.time.Instant;
 import java.util.Base64;
 import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.TimeUnit;
-import java.util.concurrent.atomic.AtomicReference;
 
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatNoException;
@@ -172,20 +171,6 @@ class QueueTiClientTest {
         final var asyncStub = QueueServiceGrpc.newStub(inProcessChannel)
                 .withCallCredentials(credentials);
 
-        // Start a real refresher thread using the package-private constructor trick:
-        // build a temporary client, extract its thread, then wrap it in the real client.
-        final var refreshedToken = new AtomicReference<String>("unchanged");
-        final TokenRefresher noopRefresher =
-                () -> CompletableFuture.completedFuture("refreshed");
-
-        // Use connect() on in-process won't work (NettyChannelBuilder), so wire the thread
-        // manually via the package-private constructor path.
-        final var tempClient = new QueueTiClient(
-                inProcessChannel, tokenStore, futureStub, asyncStub, null);
-
-        // Reflectively start the refresher via the private method isn't possible cleanly;
-        // instead we spin a virtual thread that mimics what QueueTiClient.startRefresher does
-        // (just blocks indefinitely) so we can assert it stops on close().
         final var latchedThread = Thread.ofVirtual()
                 .name("queue-ti-token-refresher")
                 .start(() -> {
