@@ -1,12 +1,14 @@
 package de.joesst.dev.queueti;
 
 import com.google.protobuf.Timestamp;
+import de.joesst.dev.queueti.pb.DequeueResponse;
 import de.joesst.dev.queueti.pb.SubscribeResponse;
 import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Test;
 
 import java.time.Instant;
 import java.util.Map;
+import java.util.OptionalInt;
 import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.atomic.AtomicReference;
 
@@ -32,7 +34,8 @@ class MessageTest {
                 Instant.EPOCH,
                 0,
                 () -> CompletableFuture.completedFuture(null),
-                reason -> CompletableFuture.completedFuture(null));
+                reason -> CompletableFuture.completedFuture(null),
+                OptionalInt.empty());
     }
 
     // ── Tests ─────────────────────────────────────────────────────────────────
@@ -123,7 +126,8 @@ class MessageTest {
                     ackInvoked.complete(null);
                     return ackInvoked;
                 },
-                reason -> CompletableFuture.completedFuture(null));
+                reason -> CompletableFuture.completedFuture(null),
+                OptionalInt.empty());
 
         // When
         msg.ack();
@@ -148,7 +152,8 @@ class MessageTest {
                 reason -> {
                     capturedReason.set(reason);
                     return CompletableFuture.completedFuture(null);
-                });
+                },
+                OptionalInt.empty());
 
         // When
         msg.nack("err");
@@ -167,5 +172,45 @@ class MessageTest {
         assertThat(msg.metadata())
                 .isNotNull()
                 .isEmpty();
+    }
+
+    @Test
+    @DisplayName("maxRetries is empty for messages built from a SubscribeResponse")
+    void maxRetries_is_empty_for_subscribe_response() {
+        // Given
+        final var resp = SubscribeResponse.newBuilder()
+                .setId("sub-1")
+                .setTopic("t")
+                .build();
+
+        // When
+        final var msg = Message.fromSubscribeResponse(
+                resp,
+                () -> CompletableFuture.completedFuture(null),
+                reason -> CompletableFuture.completedFuture(null));
+
+        // Then
+        assertThat(msg.maxRetries().isEmpty()).isTrue();
+    }
+
+    @Test
+    @DisplayName("maxRetries is present and correct for messages built from a DequeueResponse")
+    void maxRetries_is_present_for_dequeue_response() {
+        // Given
+        final var resp = DequeueResponse.newBuilder()
+                .setId("deq-1")
+                .setTopic("t")
+                .setMaxRetries(3)
+                .build();
+
+        // When
+        final var msg = Message.fromDequeueResponse(
+                resp,
+                () -> CompletableFuture.completedFuture(null),
+                reason -> CompletableFuture.completedFuture(null));
+
+        // Then
+        assertThat(msg.maxRetries().isPresent()).isTrue();
+        assertThat(msg.maxRetries().getAsInt()).isEqualTo(3);
     }
 }

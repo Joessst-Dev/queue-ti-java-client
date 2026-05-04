@@ -3,6 +3,7 @@ package de.joesst.dev.queueti;
 import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Test;
 
+import java.util.HashMap;
 import java.util.Map;
 
 import static org.assertj.core.api.Assertions.assertThat;
@@ -129,5 +130,22 @@ class OptionsTest {
 
         // Then
         assertThat(opts.getVisibilityTimeoutSeconds()).isNull();
+    }
+
+    @Test
+    @DisplayName("PublishOptions metadata is defensively copied from the builder map")
+    void publishOptions_metadata_is_defensively_copied() {
+        // Given
+        final var original = new HashMap<String, String>();
+        original.put("k", "v");
+        final var opts = PublishOptions.builder().metadata(original).build();
+
+        // When — mutate the original map after build
+        original.put("extra", "should-not-appear");
+
+        // Then — getMetadata() must not reflect the post-build mutation
+        assertThat(opts.getMetadata())
+                .containsOnlyKeys("k")
+                .doesNotContainKey("extra");
     }
 }

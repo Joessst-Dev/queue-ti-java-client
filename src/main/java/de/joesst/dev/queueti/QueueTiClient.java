@@ -9,6 +9,7 @@ import java.time.Duration;
 import java.time.Instant;
 import java.util.concurrent.ExecutionException;
 import java.util.concurrent.TimeUnit;
+import java.util.concurrent.TimeoutException;
 import java.util.logging.Level;
 import java.util.logging.Logger;
 
@@ -76,7 +77,8 @@ public final class QueueTiClient implements Closeable {
      * <p>If a {@link TokenRefresher} is configured, a background virtual thread is started
      * immediately and will proactively refresh the token before it expires.
      *
-     * @param address the server address in {@code host:port} form; must not be {@code null}
+     * @param address the server address in {@code host:port} form; must not be {@code null}.
+     *        IPv6 addresses must use bracket notation, e.g. {@code [::1]:50051}.
      * @param options connection configuration; must not be {@code null}
      * @return a connected, ready-to-use {@code QueueTiClient}
      * @throws IllegalArgumentException if {@code address} cannot be parsed as {@code host:port}
@@ -112,13 +114,10 @@ public final class QueueTiClient implements Closeable {
 
         Thread refresherThread = null;
         if (options.getTokenRefresher() != null) {
-            final var client = new QueueTiClient(
-                    channel, tokenStore, futureStub, asyncStub, null);
-            refresherThread = client.startRefresher(options.getTokenRefresher());
-            return new QueueTiClient(channel, tokenStore, futureStub, asyncStub, refresherThread);
+            refresherThread = startRefresher(options.getTokenRefresher(), tokenStore);
         }
 
-        return new QueueTiClient(channel, tokenStore, futureStub, asyncStub, null);
+        return new QueueTiClient(channel, tokenStore, futureStub, asyncStub, refresherThread);
     }
 
     // -------------------------------------------------------------------------
@@ -225,14 +224,13 @@ public final class QueueTiClient implements Closeable {
      * @param refresher the strategy for obtaining a fresh token
      * @return the started virtual thread
      */
-    private Thread startRefresher(final TokenRefresher refresher) {
-        final var thread = Thread.ofVirtual()
+    private static Thread startRefresher(final TokenRefresher refresher, final TokenStore tokenStore) {
+        return Thread.ofVirtual()
                 .name("queue-ti-token-refresher")
-                .start(() -> runRefreshLoop(refresher));
-        return thread;
+                .start(() -> runRefreshLoop(refresher, tokenStore));
     }
 
-    private void runRefreshLoop(final TokenRefresher refresher) {
+    private static void runRefreshLoop(final TokenRefresher refresher, final TokenStore tokenStore) {
         long retryBackoffSeconds = RETRY_BACKOFF_INITIAL_SECONDS;
 
         while (!Thread.currentThread().isInterrupted()) {
@@ -265,17 +263,21 @@ public final class QueueTiClient implements Closeable {
 
             // --- Refresh ---
             try {
-                final String newToken = refresher.refresh().get();
+                final String newToken = refresher.refresh().get(30, TimeUnit.SECONDS);
                 tokenStore.set(newToken);
                 retryBackoffSeconds = RETRY_BACKOFF_INITIAL_SECONDS;
                 logger.fine("queue-ti: token refreshed successfully");
             } catch (InterruptedException e) {
                 Thread.currentThread().interrupt();
                 return;
-            } catch (ExecutionException e) {
+            } catch (ExecutionException | TimeoutException e) {
+                final Throwable cause = (e instanceof ExecutionException ee) ? ee.getCause() : e;
+                final String causeMsg = cause.getMessage() != null
+                        ? cause.getMessage()
+                        : cause.getClass().getName();
                 logger.log(Level.WARNING,
                         "queue-ti: token refresh failed, retrying in {0}s: {1}",
-                        new Object[]{retryBackoffSeconds, e.getCause().getMessage()});
+                        new Object[]{retryBackoffSeconds, causeMsg});
                 if (!sleepSeconds(retryBackoffSeconds)) {
                     return;
                 }

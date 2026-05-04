@@ -155,14 +155,26 @@ class ConsumerBatchTest {
     }
 
     /**
-     * Starts {@link Consumer#consumeBatch} on a virtual thread and returns that thread
-     * so the caller can interrupt it when done.
+     * Starts {@link Consumer#consumeBatch(int, BatchMessageHandler)} on a virtual thread
+     * and returns that thread so the caller can interrupt it when done.
      */
     private Thread startBatchConsuming(
             final Consumer consumer,
             final int batchSize,
             final BatchMessageHandler handler) {
         return Thread.ofVirtual().start(() -> consumer.consumeBatch(batchSize, handler));
+    }
+
+    /**
+     * Starts {@link Consumer#consumeBatch(int, BatchMessageHandler, BatchOptions)} on a
+     * virtual thread and returns that thread so the caller can interrupt it when done.
+     */
+    private Thread startBatchConsuming(
+            final Consumer consumer,
+            final int batchSize,
+            final BatchMessageHandler handler,
+            final BatchOptions batchOptions) {
+        return Thread.ofVirtual().start(() -> consumer.consumeBatch(batchSize, handler, batchOptions));
     }
 
     // =========================================================================
@@ -465,6 +477,29 @@ class ConsumerBatchTest {
             // Then
             assertThat(fakeService.ackLatch.await(2, TimeUnit.SECONDS)).isTrue();
             assertThat(fakeService.lastRequest.hasVisibilityTimeoutSeconds()).isFalse();
+        } finally {
+            thread.interrupt();
+            thread.join(1000);
+        }
+    }
+
+    @Test
+    @DisplayName("BatchOptions consumer group overrides ConsumerOptions consumer group")
+    void consumeBatch_with_batch_options_uses_batch_options_consumer_group() throws InterruptedException {
+        // Given — consumer built with "from-consumer", call made with BatchOptions "from-batch"
+        fakeService.responses.add(batchOf(dequeueResponse("msg-bo")));
+        fakeService.ackLatch = new CountDownLatch(1);
+        final var consumerOptions = ConsumerOptions.builder().consumerGroup("from-consumer").build();
+        final var consumer = new Consumer(asyncStub, futureStub, "test-topic", consumerOptions);
+        final var batchOptions = BatchOptions.builder().consumerGroup("from-batch").build();
+
+        // When
+        final var thread = startBatchConsuming(consumer, 1, messages -> null, batchOptions);
+
+        try {
+            // Then — the request must carry "from-batch", not "from-consumer"
+            assertThat(fakeService.ackLatch.await(2, TimeUnit.SECONDS)).isTrue();
+            assertThat(fakeService.lastRequest.getConsumerGroup()).isEqualTo("from-batch");
         } finally {
             thread.interrupt();
             thread.join(1000);

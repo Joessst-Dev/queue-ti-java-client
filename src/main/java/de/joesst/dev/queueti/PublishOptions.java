@@ -13,7 +13,7 @@ public final class PublishOptions {
     private final String key;
 
     private PublishOptions(Builder builder) {
-        this.metadata = builder.metadata != null ? builder.metadata : Map.of();
+        this.metadata = builder.metadata != null ? Map.copyOf(builder.metadata) : Map.of();
         this.key = builder.key;
     }
 

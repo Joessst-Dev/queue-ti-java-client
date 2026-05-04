@@ -15,6 +15,7 @@ import java.util.regex.Pattern;
  */
 class TokenStore {
 
+    // Simple regex match — sufficient for well-formed JWTs; does not handle string-escaped "exp" keys.
     private static final Pattern EXP_PATTERN = Pattern.compile("\"exp\"\\s*:\\s*(\\d+)");
 
     private final ReentrantReadWriteLock lock = new ReentrantReadWriteLock();

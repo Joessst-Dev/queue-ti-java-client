@@ -27,6 +27,8 @@ import java.util.concurrent.Executors;
 import java.util.concurrent.Semaphore;
 import java.util.concurrent.ScheduledExecutorService;
 import java.util.concurrent.TimeUnit;
+import java.util.concurrent.atomic.AtomicBoolean;
+import java.util.concurrent.atomic.AtomicReference;
 import java.util.function.Function;
 import java.util.function.Supplier;
 import java.util.logging.Logger;
@@ -106,15 +108,13 @@ public final class Consumer {
      * @param handler the callback invoked for every delivered message; must not be {@code null}
      */
     public void consume(final MessageHandler handler) {
-        // Mutable state visible to inner-class lambdas via one-element arrays.
-        // We use single-element arrays because lambdas cannot close over non-final locals.
-        final boolean[] cancelledRef = {false};
+        final AtomicBoolean cancelledRef = new AtomicBoolean(false);
         final Semaphore sem = new Semaphore(options.getConcurrency());
         final ExecutorService executor = Executors.newVirtualThreadPerTaskExecutor();
         final ScheduledExecutorService scheduler = Executors.newSingleThreadScheduledExecutor(
                 r -> Thread.ofVirtual().name("queue-ti-reconnect-scheduler").unstarted(r));
         final CountDownLatch doneLatch = new CountDownLatch(1);
-        final Duration[] backoff = {BACKOFF_START};
+        final AtomicReference<Duration> backoff = new AtomicReference<>(BACKOFF_START);
 
         // Kick off the first stream connection immediately.
         scheduleConnect(Duration.ZERO, cancelledRef, sem, executor, scheduler,
@@ -124,10 +124,10 @@ public final class Consumer {
             doneLatch.await();
         } catch (InterruptedException e) {
             Thread.currentThread().interrupt();
-            cancelledRef[0] = true;
+            cancelledRef.set(true);
         }
 
-        cancelledRef[0] = true;
+        cancelledRef.set(true);
         scheduler.shutdownNow();
         executor.shutdown();
         try {
@@ -150,23 +150,56 @@ public final class Consumer {
      * <p>If {@code handler} throws any {@link Throwable}, every message in the batch that
      * has not already been nacked is nacked with the throwable's message as the reason.
      *
+     * <p>Consumer group and visibility timeout are taken from the {@link ConsumerOptions}
+     * supplied at construction time.
+     *
      * @param batchSize maximum number of messages to request per poll; must be {@code >= 1}
      * @param handler   handler invoked with each non-empty batch; must not be {@code null}
      * @throws IllegalArgumentException if {@code batchSize < 1}
      */
     public void consumeBatch(final int batchSize, final BatchMessageHandler handler) {
+        final BatchOptions bo = BatchOptions.builder()
+                .consumerGroup(options.getConsumerGroup())
+                .visibilityTimeoutSeconds(options.getVisibilityTimeoutSeconds())
+                .build();
+        consumeBatch(batchSize, handler, bo);
+    }
+
+    /**
+     * Starts the batch-polling consumer loop, delivering each batch of messages to
+     * {@code handler}, using the supplied {@link BatchOptions} to override the consumer
+     * group and visibility timeout configured at construction time.
+     *
+     * <p>This method blocks until the calling thread is interrupted.
+     *
+     * @param batchSize    maximum number of messages to request per poll; must be {@code >= 1}
+     * @param handler      handler invoked with each non-empty batch; must not be {@code null}
+     * @param batchOptions per-call overrides for consumer group and visibility timeout;
+     *                     must not be {@code null}
+     * @throws IllegalArgumentException if {@code batchSize < 1}
+     */
+    public void consumeBatch(final int batchSize, final BatchMessageHandler handler,
+                             final BatchOptions batchOptions) {
         if (batchSize < 1) {
             throw new IllegalArgumentException("batchSize must be >= 1");
         }
+        runBatchLoop(batchSize, handler, batchOptions);
+    }
 
+    /**
+     * Core poll loop extracted so both {@code consumeBatch} overloads share a single
+     * implementation.
+     */
+    private void runBatchLoop(final int batchSize, final BatchMessageHandler handler,
+                              final BatchOptions batchOptions) {
         Duration backoff = BACKOFF_START;
         while (!Thread.currentThread().isInterrupted()) {
             final BatchDequeueRequest.Builder req = BatchDequeueRequest.newBuilder()
                     .setTopic(topic)
                     .setCount(batchSize)
-                    .setConsumerGroup(options.getConsumerGroup());
-            if (options.getVisibilityTimeoutSeconds() != null) {
-                req.setVisibilityTimeoutSeconds(options.getVisibilityTimeoutSeconds());
+                    .setConsumerGroup(batchOptions.getConsumerGroup());
+            if (batchOptions.getVisibilityTimeoutSeconds() != null) {
+                req.setVisibilityTimeoutSeconds(batchOptions.getVisibilityTimeoutSeconds());
             }
 
             final List<DequeueResponse> rawMessages;
@@ -206,7 +239,7 @@ public final class Consumer {
                     final ListenableFuture<AckResponse> lf = futureStub.ack(
                             AckRequest.newBuilder()
                                     .setId(msgId)
-                                    .setConsumerGroup(options.getConsumerGroup())
+                                    .setConsumerGroup(batchOptions.getConsumerGroup())
                                     .build());
                     lf.addListener(() -> {
                         try {
@@ -229,7 +262,7 @@ public final class Consumer {
                             NackRequest.newBuilder()
                                     .setId(msgId)
                                     .setError(reason)
-                                    .setConsumerGroup(options.getConsumerGroup())
+                                    .setConsumerGroup(batchOptions.getConsumerGroup())
                                     .build());
                     lf.addListener(() -> {
                         try {
@@ -284,12 +317,12 @@ public final class Consumer {
      */
     private void scheduleConnect(
             final Duration delay,
-            final boolean[] cancelledRef,
+            final AtomicBoolean cancelledRef,
             final Semaphore sem,
             final ExecutorService executor,
             final ScheduledExecutorService scheduler,
             final CountDownLatch doneLatch,
-            final Duration[] backoff,
+            final AtomicReference<Duration> backoff,
             final MessageHandler handler) {
         final long delayMs = delay.toMillis();
         scheduler.schedule(
@@ -304,15 +337,15 @@ public final class Consumer {
      * handles reconnection on error or clean close.
      */
     private void openStream(
-            final boolean[] cancelledRef,
+            final AtomicBoolean cancelledRef,
             final Semaphore sem,
             final ExecutorService executor,
             final ScheduledExecutorService scheduler,
             final CountDownLatch doneLatch,
-            final Duration[] backoff,
+            final AtomicReference<Duration> backoff,
             final MessageHandler handler) {
 
-        if (cancelledRef[0]) {
+        if (cancelledRef.get()) {
             return;
         }
 
@@ -327,7 +360,7 @@ public final class Consumer {
 
             @Override
             public void onNext(final SubscribeResponse resp) {
-                if (cancelledRef[0]) {
+                if (cancelledRef.get()) {
                     return;
                 }
 
@@ -335,7 +368,7 @@ public final class Consumer {
                     sem.acquire();
                 } catch (InterruptedException e) {
                     Thread.currentThread().interrupt();
-                    cancelledRef[0] = true;
+                    cancelledRef.set(true);
                     doneLatch.countDown();
                     return;
                 }
@@ -395,23 +428,24 @@ public final class Consumer {
 
             @Override
             public void onError(final Throwable t) {
-                if (cancelledRef[0]) {
+                if (cancelledRef.get()) {
                     return;
                 }
+                final Duration current = backoff.get();
                 logger.warning("queue-ti consumer: stream error on topic '" + topic
-                        + "', reconnecting in " + backoff[0].toMillis() + "ms: " + t);
-                scheduleConnect(backoff[0], cancelledRef, sem, executor, scheduler,
+                        + "', reconnecting in " + current.toMillis() + "ms: " + t);
+                scheduleConnect(current, cancelledRef, sem, executor, scheduler,
                                 doneLatch, backoff, handler);
-                backoff[0] = nextBackoff(backoff[0]);
+                backoff.set(nextBackoff(current));
             }
 
             @Override
             public void onCompleted() {
-                if (cancelledRef[0]) {
+                if (cancelledRef.get()) {
                     return;
                 }
                 // Server closed cleanly — reconnect immediately and reset backoff.
-                backoff[0] = BACKOFF_START;
+                backoff.set(BACKOFF_START);
                 scheduleConnect(Duration.ZERO, cancelledRef, sem, executor, scheduler,
                                 doneLatch, backoff, handler);
             }
@@ -424,18 +458,18 @@ public final class Consumer {
      * <p>If the handler returns normally, the message is acked. If it throws, the message
      * is nacked with the throwable's message as the reason.
      *
-     * @param msg         the message to dispatch
-     * @param handler     the application-provided handler
-     * @param cancelledRef single-element array holding the cancelled flag
+     * @param msg          the message to dispatch
+     * @param handler      the application-provided handler
+     * @param cancelledRef atomic flag indicating whether the consumer has been cancelled
      */
     private void dispatch(
             final Message msg,
             final MessageHandler handler,
-            final boolean[] cancelledRef) {
+            final AtomicBoolean cancelledRef) {
         try {
             handler.handle(msg);
             msg.ack().whenComplete((v, err) -> {
-                if (err != null && !cancelledRef[0]) {
+                if (err != null && !cancelledRef.get()) {
                     logger.warning("queue-ti consumer: ack failed for "
                             + msg.id() + ": " + err);
                 }
@@ -443,7 +477,7 @@ public final class Consumer {
         } catch (Throwable t) {
             final String reason = t.getMessage() != null ? t.getMessage() : t.getClass().getName();
             msg.nack(reason).whenComplete((v, err) -> {
-                if (err != null && !cancelledRef[0]) {
+                if (err != null && !cancelledRef.get()) {
                     logger.warning("queue-ti consumer: nack failed for "
                             + msg.id() + ": " + err);
                 }

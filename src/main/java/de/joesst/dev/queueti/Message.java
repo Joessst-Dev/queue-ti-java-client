@@ -5,6 +5,7 @@ import de.joesst.dev.queueti.pb.SubscribeResponse;
 
 import java.time.Instant;
 import java.util.Map;
+import java.util.OptionalInt;
 import java.util.concurrent.CompletableFuture;
 import java.util.function.Function;
 import java.util.function.Supplier;
@@ -33,6 +34,7 @@ public final class Message {
     private final int retryCount;
     private final Supplier<CompletableFuture<Void>> ackFn;
     private final Function<String, CompletableFuture<Void>> nackFn;
+    private final OptionalInt maxRetries;
 
     /**
      * Package-private constructor — called by the library and factory methods.
@@ -45,6 +47,7 @@ public final class Message {
      * @param retryCount number of previous delivery attempts
      * @param ackFn      closure to acknowledge successful processing
      * @param nackFn     closure to negative-acknowledge with an error reason
+     * @param maxRetries maximum number of retries configured on the server, or empty if not available
      */
     Message(
             final String id,
@@ -54,7 +57,8 @@ public final class Message {
             final Instant createdAt,
             final int retryCount,
             final Supplier<CompletableFuture<Void>> ackFn,
-            final Function<String, CompletableFuture<Void>> nackFn) {
+            final Function<String, CompletableFuture<Void>> nackFn,
+            final OptionalInt maxRetries) {
         this.id = id;
         this.topic = topic;
         this.payload = payload != null ? payload.clone() : new byte[0];
@@ -63,6 +67,7 @@ public final class Message {
         this.retryCount = retryCount;
         this.ackFn = ackFn;
         this.nackFn = nackFn;
+        this.maxRetries = maxRetries;
     }
 
     // ── Accessors ─────────────────────────────────────────────────────────────
@@ -124,6 +129,18 @@ public final class Message {
         return retryCount;
     }
 
+    /**
+     * Returns the maximum number of retries configured on the server for this message.
+     *
+     * <p>Present only for messages received via {@link #fromDequeueResponse}; empty for
+     * messages received via streaming subscribe ({@link #fromSubscribeResponse}).
+     *
+     * @return the server-configured max retries, or empty if not available
+     */
+    public OptionalInt maxRetries() {
+        return maxRetries;
+    }
+
     // ── Ack / Nack ────────────────────────────────────────────────────────────
 
     /**
@@ -170,7 +187,8 @@ public final class Message {
                 createdAt,
                 resp.getRetryCount(),
                 ackFn,
-                nackFn);
+                nackFn,
+                OptionalInt.empty());
     }
 
     /**
@@ -196,6 +214,7 @@ public final class Message {
                 createdAt,
                 resp.getRetryCount(),
                 ackFn,
-                nackFn);
+                nackFn,
+                OptionalInt.of(resp.getMaxRetries()));
     }
 }
