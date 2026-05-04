@@ -93,9 +93,27 @@ jobs:
           retention-days: 7
 
       # ── Publish to GitHub Packages ────────────────────────────────────────
-      # The publishing.repositories.maven block in build.gradle.kts reads
-      # GITHUB_ACTOR and GITHUB_TOKEN from the environment.
+      # GitHub Packages Maven does not allow overwriting an existing version
+      # (HTTP 409). Skip the publish step if the version is already present so
+      # that pipeline retries don't fail here after a partial first run.
+      - name: Check if version already published
+        id: pkg_check
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          VERSION="${{ steps.version.outputs.version }}"
+          EXISTS=$(gh api \
+            "/users/${{ github.repository_owner }}/packages/maven/de.joesst.dev.queue-ti-java-client/versions" \
+            --jq ".[] | select(.name == \"$VERSION\") | .id" 2>/dev/null || echo "")
+          if [ -n "$EXISTS" ]; then
+            echo "already_published=true" >> "$GITHUB_OUTPUT"
+            echo "Version $VERSION already in GitHub Packages — skipping publish."
+          else
+            echo "already_published=false" >> "$GITHUB_OUTPUT"
+          fi
+
       - name: Publish to GitHub Packages
+        if: steps.pkg_check.outputs.already_published == 'false'
         run: ./gradlew publish -PreleaseVersion=${{ steps.version.outputs.version }}
         env:
           GITHUB_ACTOR: ${{ github.actor }}
