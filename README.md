@@ -40,7 +40,7 @@ gpr.key=ghp_xxxxxxxxxxxxxxxxxxxx
 
 ### 3. Declare the repository and dependency
 
-Replace `VERSION` with the desired release (e.g. `2026.05.0` or `2026.05.0-preview.4`). See [releases](https://github.com/Joessst-Dev/queue-ti-java-client/releases) for available versions.
+Replace `VERSION` with the desired release (e.g. `2026.05.0`). See [releases](https://github.com/Joessst-Dev/queue-ti-java-client/releases) for available versions.
 
 **Gradle (Kotlin DSL)**
 
@@ -105,7 +105,7 @@ cd queue-ti-java-client
 ./gradlew publishToMavenLocal
 ```
 
-Then use `mavenLocal()` as the repository and `1.0-SNAPSHOT` as the version.
+Then use `mavenLocal()` as the repository and `1.0-SNAPSHOT` as the version (the default when no `-PreleaseVersion` is passed to Gradle).
 
 ## Quick Start
 
