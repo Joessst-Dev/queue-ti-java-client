@@ -1,0 +1,130 @@
+# .github/workflows/release.yml
+#
+# Release pipeline for queue-ti-java-client
+#
+# Triggers: any tag push matching v* (e.g. v2026.05.0, v2026.05.0-preview.4).
+# Responsibilities:
+#   1. Build and run the full test suite — never publish a broken artifact.
+#   2. Derive the library version from the tag (strip leading "v").
+#   3. Publish the JAR to GitHub Packages (Maven).
+#   4. Create a GitHub Release, attach the JAR, and set pre-release / latest
+#      flags based on whether the tag contains a hyphen.
+#
+# Required secrets (all provided automatically by GitHub Actions):
+#   GITHUB_TOKEN — used for GitHub Packages auth and release creation.
+#
+# Required repository settings:
+#   Actions > General > Workflow permissions: "Read and write permissions"
+#   (or the explicit permissions block below is sufficient on repos that allow
+#   per-workflow permission grants).
+
+name: Release
+
+on:
+  push:
+    tags:
+      - 'v*'
+
+# No concurrency group — tags are unique; two pushes of the same tag cannot
+# race, and we never want to cancel a release mid-flight.
+
+permissions:
+  contents: write   # create GitHub Releases and upload assets
+  packages: write   # publish to GitHub Packages (Maven)
+
+jobs:
+  release:
+    name: Build, Publish & Release
+    runs-on: ubuntu-latest
+
+    steps:
+      # ── Checkout ──────────────────────────────────────────────────────────
+      - name: Checkout repository
+        uses: actions/checkout@v4
+        with:
+          # Full history so any git-describe or changelog tooling has context.
+          fetch-depth: 0
+
+      # ── Java + Gradle cache ───────────────────────────────────────────────
+      - name: Set up Java 21 (Temurin)
+        uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: '21'
+          # Caches both ~/.gradle/wrapper and ~/.gradle/caches keyed on
+          # build files; no separate cache action needed.
+          cache: gradle
+
+      # ── Derive version from tag ───────────────────────────────────────────
+      # Strip the leading "v" so Gradle receives a plain semver/calver string.
+      # Tag v2026.05.0-preview.4 → version 2026.05.0-preview.4
+      # Tag v2026.05.0           → version 2026.05.0
+      - name: Derive version from tag
+        id: version
+        run: |
+          RAW_TAG="${{ github.ref_name }}"
+          VERSION="${RAW_TAG#v}"
+          echo "version=${VERSION}" >> "$GITHUB_OUTPUT"
+
+          # A tag is a pre-release if the version part (after "v") contains a
+          # hyphen, e.g. "2026.05.0-preview.4".  Stable tags have no hyphen.
+          if [[ "${VERSION}" == *-* ]]; then
+            echo "prerelease=true"  >> "$GITHUB_OUTPUT"
+            echo "make_latest=false" >> "$GITHUB_OUTPUT"
+          else
+            echo "prerelease=false" >> "$GITHUB_OUTPUT"
+            echo "make_latest=true"  >> "$GITHUB_OUTPUT"
+          fi
+
+      # ── Build & test ──────────────────────────────────────────────────────
+      # Pass the derived version via -Pversion so the published artifact carries
+      # the correct coordinates without touching build.gradle.kts.
+      - name: Build and run tests
+        run: ./gradlew build -Pversion=${{ steps.version.outputs.version }}
+
+      # Upload the HTML test report on failure so it can be inspected from the
+      # Actions UI without a local checkout.
+      - name: Upload test report on failure
+        if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: test-report
+          path: build/reports/tests/
+          retention-days: 7
+
+      # ── Publish to GitHub Packages ────────────────────────────────────────
+      # The publishing.repositories.maven block in build.gradle.kts reads
+      # GITHUB_ACTOR and GITHUB_TOKEN from the environment.
+      - name: Publish to GitHub Packages
+        run: ./gradlew publish -Pversion=${{ steps.version.outputs.version }}
+        env:
+          GITHUB_ACTOR: ${{ github.actor }}
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+
+      # ── Upload JAR as workflow artifact ───────────────────────────────────
+      # Stash the built JAR so the release step can attach it as an asset.
+      # Using upload/download-artifact avoids globbing build/libs/ twice and
+      # makes the asset set explicit.
+      - name: Upload JAR artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: release-jar
+          path: build/libs/*.jar
+          # Retain long enough to cover any post-release investigation window.
+          retention-days: 30
+
+      # ── Create GitHub Release ─────────────────────────────────────────────
+      - name: Create GitHub Release
+        uses: softprops/action-gh-release@v2
+        with:
+          # Use the tag name as the release title (e.g. "v2026.05.0-preview.4").
+          name: ${{ github.ref_name }}
+          # Attach every JAR in build/libs/ (typically one main + one plain jar).
+          files: build/libs/*.jar
+          # Derived from whether the version string contains a hyphen.
+          prerelease: ${{ steps.version.outputs.prerelease }}
+          # Only mark as "latest" for stable releases; pre-releases must not
+          # displace the current stable latest pointer.
+          make_latest: ${{ steps.version.outputs.make_latest }}
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}

@@ -63,4 +63,18 @@ publishing {
             from(components["java"])
         }
     }
+
+    repositories {
+        maven {
+            name = "GitHubPackages"
+            url = uri("https://maven.pkg.github.com/Joessst-Dev/queue-ti-java-client")
+            credentials {
+                // GITHUB_TOKEN is injected by the release workflow via the
+                // GITHUB_TOKEN secret; locally this block is a no-op unless
+                // the env vars are explicitly set.
+                username = System.getenv("GITHUB_ACTOR") ?: ""
+                password = System.getenv("GITHUB_TOKEN") ?: ""
+            }
+        }
+    }
 }
