@@ -7,7 +7,6 @@ import io.grpc.SecurityLevel;
 import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Test;
 
-import java.net.SocketAddress;
 import java.util.concurrent.Executor;
 
 import static org.assertj.core.api.Assertions.assertThat;
