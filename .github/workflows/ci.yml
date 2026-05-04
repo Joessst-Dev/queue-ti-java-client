@@ -1,0 +1,78 @@
+# .github/workflows/ci.yml
+#
+# CI pipeline for queue-ti-java-client
+#
+# Triggers: every push to main, every pull request targeting main.
+# Responsibilities: compile, run all tests, upload reports on failure, upload JAR on success.
+# No publishing or deployment steps are included.
+
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+
+# Cancel any in-progress run for the same branch/PR so redundant runs don't
+# consume runner minutes when commits are pushed in quick succession.
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+# Minimum permissions: this workflow only reads the repository.
+permissions:
+  contents: read
+
+jobs:
+  build:
+    name: Build & Test (Java 21)
+    runs-on: ubuntu-latest
+
+    steps:
+      # ── Checkout ──────────────────────────────────────────────────────────
+      - name: Checkout repository
+        uses: actions/checkout@v4
+        with:
+          # Full history is required for version-inference tools and git-log
+          # based change detection in future pipeline extensions.
+          fetch-depth: 0
+
+      # ── Java + Gradle cache ───────────────────────────────────────────────
+      - name: Set up Java 21 (Temurin)
+        uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: '21'
+          # Caches both the Gradle wrapper (~/.gradle/wrapper) and the
+          # dependency cache (~/.gradle/caches) keyed on build files.
+          # No separate cache step is needed.
+          cache: gradle
+
+      # ── Build & test ──────────────────────────────────────────────────────
+      - name: Build and run tests
+        run: ./gradlew build
+        # Gradle's --continue flag is intentionally omitted: we want the run
+        # to stop at the first failing task so the log stays readable.
+
+      # ── Artifacts ─────────────────────────────────────────────────────────
+
+      # Upload the HTML test report whenever tests fail so failures can be
+      # inspected directly from the Actions UI without a local checkout.
+      - name: Upload test report on failure
+        if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: test-report
+          path: build/reports/tests/
+          # Retain for 7 days — enough time to investigate a failing PR.
+          retention-days: 7
+
+      # Upload the compiled JAR only when the build succeeds.
+      - name: Upload JAR artifact
+        if: success()
+        uses: actions/upload-artifact@v4
+        with:
+          name: queue-ti-java-client-jar
+          path: build/libs/
+          retention-days: 7
