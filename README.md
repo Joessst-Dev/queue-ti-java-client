@@ -9,7 +9,95 @@ A Java 21 gRPC client library for the [queue-ti](https://github.com/Joessst-Dev/
 
 ## Installation
 
-The library is not yet published to Maven Central. Build and install it to your local Maven cache first:
+Releases are published to **GitHub Packages**. GitHub Packages requires authentication even for public repositories, so you need a Personal Access Token (PAT) before adding the dependency.
+
+### 1. Create a Personal Access Token
+
+Go to **GitHub → Settings → Developer settings → Personal access tokens → Tokens (classic)** and generate a token with the `read:packages` scope. Store it somewhere safe.
+
+### 2. Add credentials to your Gradle or Maven configuration
+
+**Gradle** — add to `~/.gradle/gradle.properties` (never commit this file):
+
+```properties
+gpr.user=your-github-username
+gpr.key=ghp_xxxxxxxxxxxxxxxxxxxx
+```
+
+**Maven** — add to `~/.m2/settings.xml`:
+
+```xml
+<settings>
+  <servers>
+    <server>
+      <id>github-queue-ti</id>
+      <username>your-github-username</username>
+      <password>ghp_xxxxxxxxxxxxxxxxxxxx</password>
+    </server>
+  </servers>
+</settings>
+```
+
+### 3. Declare the repository and dependency
+
+Replace `VERSION` with the desired release (e.g. `2026.05.0` or `2026.05.0-preview.4`). See [releases](https://github.com/Joessst-Dev/queue-ti-java-client/releases) for available versions.
+
+**Gradle (Kotlin DSL)**
+
+```kotlin
+repositories {
+    maven {
+        url = uri("https://maven.pkg.github.com/Joessst-Dev/queue-ti-java-client")
+        credentials {
+            username = providers.gradleProperty("gpr.user").orNull
+            password = providers.gradleProperty("gpr.key").orNull
+        }
+    }
+}
+
+dependencies {
+    implementation("de.joesst.dev:queue-ti-java-client:VERSION")
+}
+```
+
+**Gradle (Groovy)**
+
+```groovy
+repositories {
+    maven {
+        url 'https://maven.pkg.github.com/Joessst-Dev/queue-ti-java-client'
+        credentials {
+            username = findProperty('gpr.user')
+            password = findProperty('gpr.key')
+        }
+    }
+}
+
+dependencies {
+    implementation 'de.joesst.dev:queue-ti-java-client:VERSION'
+}
+```
+
+**Maven**
+
+```xml
+<repositories>
+    <repository>
+        <id>github-queue-ti</id>
+        <url>https://maven.pkg.github.com/Joessst-Dev/queue-ti-java-client</url>
+    </repository>
+</repositories>
+
+<dependency>
+    <groupId>de.joesst.dev</groupId>
+    <artifactId>queue-ti-java-client</artifactId>
+    <version>VERSION</version>
+</dependency>
+```
+
+### Local build (no token required)
+
+To build and install directly from source:
 
 ```bash
 git clone https://github.com/Joessst-Dev/queue-ti-java-client.git
@@ -17,48 +105,7 @@ cd queue-ti-java-client
 ./gradlew publishToMavenLocal
 ```
 
-Then declare the dependency in your project:
-
-### Gradle (Kotlin DSL)
-
-```kotlin
-repositories {
-    mavenLocal()
-}
-
-dependencies {
-    implementation("de.joesst.dev:queue-ti-java-client:1.0-SNAPSHOT")
-}
-```
-
-### Gradle (Groovy)
-
-```groovy
-repositories {
-    mavenLocal()
-}
-
-dependencies {
-    implementation 'de.joesst.dev:queue-ti-java-client:1.0-SNAPSHOT'
-}
-```
-
-### Maven
-
-```xml
-<repositories>
-    <repository>
-        <id>local</id>
-        <url>file://${user.home}/.m2/repository</url>
-    </repository>
-</repositories>
-
-<dependency>
-    <groupId>de.joesst.dev</groupId>
-    <artifactId>queue-ti-java-client</artifactId>
-    <version>1.0-SNAPSHOT</version>
-</dependency>
-```
+Then use `mavenLocal()` as the repository and `1.0-SNAPSHOT` as the version.
 
 ## Quick Start
 
