@@ -132,19 +132,30 @@ jobs:
           retention-days: 30
 
       # ── Create GitHub Release ─────────────────────────────────────────────
+      # Use gh CLI directly: create a fresh release, or edit + re-upload assets
+      # if the release already exists (idempotent on pipeline retries).
       - name: Create GitHub Release
-        uses: softprops/action-gh-release@v2
-        with:
-          # Use the tag name as the release title (e.g. "v2026.05.0-preview.4").
-          name: ${{ github.ref_name }}
-          # Attach every JAR in build/libs/ (typically one main + one plain jar).
-          files: build/libs/*.jar
-          # Derived from whether the version string contains a hyphen.
-          prerelease: ${{ steps.version.outputs.prerelease }}
-          # Only mark as "latest" for stable releases; pre-releases must not
-          # displace the current stable latest pointer.
-          make_latest: ${{ steps.version.outputs.make_latest }}
-          # Update an existing release if the tag was already released (e.g. pipeline retry).
-          overwrite: true
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          TAG="${{ github.ref_name }}"
+          PRERELEASE="${{ steps.version.outputs.prerelease }}"
+          MAKE_LATEST="${{ steps.version.outputs.make_latest }}"
+
+          PRERELEASE_FLAG=""
+          [ "$PRERELEASE" = "true" ] && PRERELEASE_FLAG="--prerelease"
+
+          LATEST_FLAG="--latest"
+          [ "$MAKE_LATEST" = "false" ] && LATEST_FLAG="--no-latest"
+
+          if gh release view "$TAG" --repo "${{ github.repository }}" > /dev/null 2>&1; then
+            echo "Release $TAG already exists — updating assets."
+            gh release edit "$TAG" --title "$TAG" $PRERELEASE_FLAG $LATEST_FLAG \
+              --repo "${{ github.repository }}"
+            gh release upload "$TAG" build/libs/*.jar --clobber \
+              --repo "${{ github.repository }}"
+          else
+            gh release create "$TAG" build/libs/*.jar \
+              --title "$TAG" $PRERELEASE_FLAG $LATEST_FLAG \
+              --repo "${{ github.repository }}"
+          fi
