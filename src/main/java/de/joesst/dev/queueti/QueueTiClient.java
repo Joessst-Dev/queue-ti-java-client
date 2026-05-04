@@ -84,21 +84,8 @@ public final class QueueTiClient implements Closeable {
      * @throws IllegalArgumentException if {@code address} cannot be parsed as {@code host:port}
      */
     public static QueueTiClient connect(final String address, final ConnectOptions options) {
-        final int lastColon = address.lastIndexOf(':');
-        if (lastColon < 0) {
-            throw new IllegalArgumentException(
-                    "address must be in host:port form, got: " + address);
-        }
-        final String host = address.substring(0, lastColon);
-        final int port;
-        try {
-            port = Integer.parseInt(address.substring(lastColon + 1));
-        } catch (NumberFormatException e) {
-            throw new IllegalArgumentException(
-                    "address port is not a valid integer in: " + address, e);
-        }
-
-        final var builder = NettyChannelBuilder.forAddress(host, port);
+        final HostPort addr = parseAddress(address);
+        final var builder = NettyChannelBuilder.forAddress(addr.host(), addr.port());
         if (options.isInsecure()) {
             builder.usePlaintext();
         }
@@ -300,6 +287,23 @@ public final class QueueTiClient implements Closeable {
         } catch (InterruptedException e) {
             Thread.currentThread().interrupt();
             return false;
+        }
+    }
+
+    private record HostPort(String host, int port) {}
+
+    private static HostPort parseAddress(final String address) {
+        final int lastColon = address.lastIndexOf(':');
+        if (lastColon < 0) {
+            throw new IllegalArgumentException(
+                    "address must be in host:port form, got: " + address);
+        }
+        final String host = address.substring(0, lastColon);
+        try {
+            return new HostPort(host, Integer.parseInt(address.substring(lastColon + 1)));
+        } catch (NumberFormatException e) {
+            throw new IllegalArgumentException(
+                    "address port is not a valid integer in: " + address, e);
         }
     }
 }

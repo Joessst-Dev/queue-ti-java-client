@@ -1,5 +1,6 @@
 package de.joesst.dev.queueti;
 
+import com.google.protobuf.Timestamp;
 import de.joesst.dev.queueti.pb.DequeueResponse;
 import de.joesst.dev.queueti.pb.SubscribeResponse;
 
@@ -176,15 +177,12 @@ public final class Message {
             final SubscribeResponse resp,
             final Supplier<CompletableFuture<Void>> ackFn,
             final Function<String, CompletableFuture<Void>> nackFn) {
-        final Instant createdAt = resp.hasCreatedAt()
-                ? Instant.ofEpochSecond(resp.getCreatedAt().getSeconds(), resp.getCreatedAt().getNanos())
-                : Instant.EPOCH;
         return new Message(
                 resp.getId(),
                 resp.getTopic(),
                 resp.getPayload().toByteArray(),
                 resp.getMetadataMap(),
-                createdAt,
+                toInstant(resp.getCreatedAt(), resp.hasCreatedAt()),
                 resp.getRetryCount(),
                 ackFn,
                 nackFn,
@@ -203,18 +201,19 @@ public final class Message {
             final DequeueResponse resp,
             final Supplier<CompletableFuture<Void>> ackFn,
             final Function<String, CompletableFuture<Void>> nackFn) {
-        final Instant createdAt = resp.hasCreatedAt()
-                ? Instant.ofEpochSecond(resp.getCreatedAt().getSeconds(), resp.getCreatedAt().getNanos())
-                : Instant.EPOCH;
         return new Message(
                 resp.getId(),
                 resp.getTopic(),
                 resp.getPayload().toByteArray(),
                 resp.getMetadataMap(),
-                createdAt,
+                toInstant(resp.getCreatedAt(), resp.hasCreatedAt()),
                 resp.getRetryCount(),
                 ackFn,
                 nackFn,
                 OptionalInt.of(resp.getMaxRetries()));
+    }
+
+    private static Instant toInstant(final Timestamp ts, final boolean present) {
+        return present ? Instant.ofEpochSecond(ts.getSeconds(), ts.getNanos()) : Instant.EPOCH;
     }
 }

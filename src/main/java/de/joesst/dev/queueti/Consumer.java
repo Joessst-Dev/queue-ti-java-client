@@ -3,11 +3,9 @@ package de.joesst.dev.queueti;
 import com.google.common.util.concurrent.ListenableFuture;
 import com.google.common.util.concurrent.MoreExecutors;
 import de.joesst.dev.queueti.pb.AckRequest;
-import de.joesst.dev.queueti.pb.AckResponse;
 import de.joesst.dev.queueti.pb.BatchDequeueRequest;
 import de.joesst.dev.queueti.pb.DequeueResponse;
 import de.joesst.dev.queueti.pb.NackRequest;
-import de.joesst.dev.queueti.pb.NackResponse;
 import de.joesst.dev.queueti.pb.QueueServiceGrpc;
 import de.joesst.dev.queueti.pb.SubscribeRequest;
 import de.joesst.dev.queueti.pb.SubscribeResponse;
@@ -86,9 +84,19 @@ public final class Consumer {
         this.options = options;
     }
 
-    // -------------------------------------------------------------------------
-    // Public API
-    // -------------------------------------------------------------------------
+    // ── StreamSession: live state for one streaming session ───────────────────
+
+    /** Bundles all mutable state for a streaming lifecycle; passed as one argument. */
+    private record StreamSession(
+            AtomicBoolean cancelled,
+            Semaphore sem,
+            ExecutorService executor,
+            ScheduledExecutorService scheduler,
+            CountDownLatch doneLatch,
+            AtomicReference<Duration> backoff,
+            MessageHandler handler) {}
+
+    // ── Public API ────────────────────────────────────────────────────────────
 
     /**
      * Starts the streaming consumer loop, delivering each message to {@code handler}.
@@ -108,30 +116,30 @@ public final class Consumer {
      * @param handler the callback invoked for every delivered message; must not be {@code null}
      */
     public void consume(final MessageHandler handler) {
-        final AtomicBoolean cancelledRef = new AtomicBoolean(false);
-        final Semaphore sem = new Semaphore(options.getConcurrency());
-        final ExecutorService executor = Executors.newVirtualThreadPerTaskExecutor();
-        final ScheduledExecutorService scheduler = Executors.newSingleThreadScheduledExecutor(
-                r -> Thread.ofVirtual().name("queue-ti-reconnect-scheduler").unstarted(r));
-        final CountDownLatch doneLatch = new CountDownLatch(1);
-        final AtomicReference<Duration> backoff = new AtomicReference<>(BACKOFF_START);
+        final var session = new StreamSession(
+                new AtomicBoolean(false),
+                new Semaphore(options.getConcurrency()),
+                Executors.newVirtualThreadPerTaskExecutor(),
+                Executors.newSingleThreadScheduledExecutor(
+                        r -> Thread.ofVirtual().name("queue-ti-reconnect-scheduler").unstarted(r)),
+                new CountDownLatch(1),
+                new AtomicReference<>(BACKOFF_START),
+                handler);
 
-        // Kick off the first stream connection immediately.
-        scheduleConnect(Duration.ZERO, cancelledRef, sem, executor, scheduler,
-                        doneLatch, backoff, handler);
+        scheduleConnect(Duration.ZERO, session);
 
         try {
-            doneLatch.await();
+            session.doneLatch().await();
         } catch (InterruptedException e) {
             Thread.currentThread().interrupt();
-            cancelledRef.set(true);
+            session.cancelled().set(true);
         }
 
-        cancelledRef.set(true);
-        scheduler.shutdownNow();
-        executor.shutdown();
+        session.cancelled().set(true);
+        session.scheduler().shutdownNow();
+        session.executor().shutdown();
         try {
-            executor.awaitTermination(5, TimeUnit.SECONDS);
+            session.executor().awaitTermination(5, TimeUnit.SECONDS);
         } catch (InterruptedException e) {
             Thread.currentThread().interrupt();
         }
@@ -183,15 +191,6 @@ public final class Consumer {
         if (batchSize < 1) {
             throw new IllegalArgumentException("batchSize must be >= 1");
         }
-        runBatchLoop(batchSize, handler, batchOptions);
-    }
-
-    /**
-     * Core poll loop extracted so both {@code consumeBatch} overloads share a single
-     * implementation.
-     */
-    private void runBatchLoop(final int batchSize, final BatchMessageHandler handler,
-                              final BatchOptions batchOptions) {
         Duration backoff = BACKOFF_START;
         while (!Thread.currentThread().isInterrupted()) {
             final BatchDequeueRequest.Builder req = BatchDequeueRequest.newBuilder()
@@ -224,66 +223,15 @@ public final class Consumer {
 
             backoff = BACKOFF_START;
 
-            // Build Message list with ack/nack closures wired to this batch.
-            // ackedIds and nackedIds track explicit calls so the post-handler auto-ack/nack
-            // loop can skip messages the handler already settled.
-            final List<Message> messages = new ArrayList<>(rawMessages.size());
             final Set<String> ackedIds  = Collections.synchronizedSet(new HashSet<>());
             final Set<String> nackedIds = Collections.synchronizedSet(new HashSet<>());
+            final List<Message> messages = new ArrayList<>(rawMessages.size());
             for (final DequeueResponse raw : rawMessages) {
-                final String msgId = raw.getId();
-
-                final Supplier<CompletableFuture<Void>> ackFn = () -> {
-                    ackedIds.add(msgId);
-                    final CompletableFuture<Void> cf = new CompletableFuture<>();
-                    final ListenableFuture<AckResponse> lf = futureStub.ack(
-                            AckRequest.newBuilder()
-                                    .setId(msgId)
-                                    .setConsumerGroup(batchOptions.getConsumerGroup())
-                                    .build());
-                    lf.addListener(() -> {
-                        try {
-                            lf.get();
-                            cf.complete(null);
-                        } catch (ExecutionException e) {
-                            cf.completeExceptionally(e.getCause());
-                        } catch (InterruptedException e) {
-                            Thread.currentThread().interrupt();
-                            cf.completeExceptionally(e);
-                        }
-                    }, MoreExecutors.directExecutor());
-                    return cf;
-                };
-
-                final Function<String, CompletableFuture<Void>> nackFn = reason -> {
-                    nackedIds.add(msgId);
-                    final CompletableFuture<Void> cf = new CompletableFuture<>();
-                    final ListenableFuture<NackResponse> lf = futureStub.nack(
-                            NackRequest.newBuilder()
-                                    .setId(msgId)
-                                    .setError(reason)
-                                    .setConsumerGroup(batchOptions.getConsumerGroup())
-                                    .build());
-                    lf.addListener(() -> {
-                        try {
-                            lf.get();
-                            cf.complete(null);
-                        } catch (ExecutionException e) {
-                            cf.completeExceptionally(e.getCause());
-                        } catch (InterruptedException e) {
-                            Thread.currentThread().interrupt();
-                            cf.completeExceptionally(e);
-                        }
-                    }, MoreExecutors.directExecutor());
-                    return cf;
-                };
-
-                messages.add(Message.fromDequeueResponse(raw, ackFn, nackFn));
+                messages.add(buildBatchMessage(raw, batchOptions, ackedIds, nackedIds));
             }
 
             try {
                 handler.handle(messages);
-                // Auto-ack any message the handler did not explicitly ack or nack.
                 for (final Message msg : messages) {
                     if (!ackedIds.contains(msg.id()) && !nackedIds.contains(msg.id())) {
                         msg.ack().whenComplete((v, err) -> {
@@ -308,27 +256,15 @@ public final class Consumer {
         }
     }
 
-    // -------------------------------------------------------------------------
-    // Private helpers
-    // -------------------------------------------------------------------------
+    // ── Private helpers ───────────────────────────────────────────────────────
 
     /**
      * Schedules a call to {@link #openStream} after {@code delay}.
      */
-    private void scheduleConnect(
-            final Duration delay,
-            final AtomicBoolean cancelledRef,
-            final Semaphore sem,
-            final ExecutorService executor,
-            final ScheduledExecutorService scheduler,
-            final CountDownLatch doneLatch,
-            final AtomicReference<Duration> backoff,
-            final MessageHandler handler) {
-        final long delayMs = delay.toMillis();
-        scheduler.schedule(
-                () -> openStream(cancelledRef, sem, executor, scheduler,
-                                 doneLatch, backoff, handler),
-                delayMs,
+    private void scheduleConnect(final Duration delay, final StreamSession session) {
+        session.scheduler().schedule(
+                () -> openStream(session),
+                delay.toMillis(),
                 TimeUnit.MILLISECONDS);
     }
 
@@ -336,16 +272,8 @@ public final class Consumer {
      * Opens one server-streaming Subscribe call and wires a {@link StreamObserver} that
      * handles reconnection on error or clean close.
      */
-    private void openStream(
-            final AtomicBoolean cancelledRef,
-            final Semaphore sem,
-            final ExecutorService executor,
-            final ScheduledExecutorService scheduler,
-            final CountDownLatch doneLatch,
-            final AtomicReference<Duration> backoff,
-            final MessageHandler handler) {
-
-        if (cancelledRef.get()) {
+    private void openStream(final StreamSession session) {
+        if (session.cancelled().get()) {
             return;
         }
 
@@ -360,96 +288,87 @@ public final class Consumer {
 
             @Override
             public void onNext(final SubscribeResponse resp) {
-                if (cancelledRef.get()) {
+                if (session.cancelled().get()) {
                     return;
                 }
-
                 try {
-                    sem.acquire();
+                    session.sem().acquire();
                 } catch (InterruptedException e) {
                     Thread.currentThread().interrupt();
-                    cancelledRef.set(true);
-                    doneLatch.countDown();
+                    session.cancelled().set(true);
+                    session.doneLatch().countDown();
                     return;
                 }
 
-                final Supplier<CompletableFuture<Void>> ackFn = () -> {
-                    final CompletableFuture<Void> cf = new CompletableFuture<>();
-                    final ListenableFuture<AckResponse> lf = futureStub.ack(
-                            AckRequest.newBuilder()
-                                    .setId(resp.getId())
-                                    .setConsumerGroup(options.getConsumerGroup())
-                                    .build());
-                    lf.addListener(() -> {
-                        try {
-                            lf.get();
-                            cf.complete(null);
-                        } catch (ExecutionException e) {
-                            cf.completeExceptionally(e.getCause());
-                        } catch (InterruptedException e) {
-                            Thread.currentThread().interrupt();
-                            cf.completeExceptionally(e);
-                        }
-                    }, MoreExecutors.directExecutor());
-                    return cf;
-                };
+                final Supplier<CompletableFuture<Void>> ackFn = () ->
+                        toVoidFuture(futureStub.ack(AckRequest.newBuilder()
+                                .setId(resp.getId())
+                                .setConsumerGroup(options.getConsumerGroup())
+                                .build()));
 
-                final Function<String, CompletableFuture<Void>> nackFn = reason -> {
-                    final CompletableFuture<Void> cf = new CompletableFuture<>();
-                    final ListenableFuture<NackResponse> lf = futureStub.nack(
-                            NackRequest.newBuilder()
-                                    .setId(resp.getId())
-                                    .setError(reason)
-                                    .setConsumerGroup(options.getConsumerGroup())
-                                    .build());
-                    lf.addListener(() -> {
-                        try {
-                            lf.get();
-                            cf.complete(null);
-                        } catch (ExecutionException e) {
-                            cf.completeExceptionally(e.getCause());
-                        } catch (InterruptedException e) {
-                            Thread.currentThread().interrupt();
-                            cf.completeExceptionally(e);
-                        }
-                    }, MoreExecutors.directExecutor());
-                    return cf;
-                };
+                final Function<String, CompletableFuture<Void>> nackFn = reason ->
+                        toVoidFuture(futureStub.nack(NackRequest.newBuilder()
+                                .setId(resp.getId())
+                                .setError(reason)
+                                .setConsumerGroup(options.getConsumerGroup())
+                                .build()));
 
                 final Message msg = Message.fromSubscribeResponse(resp, ackFn, nackFn);
-                executor.submit(() -> {
+                session.executor().submit(() -> {
                     try {
-                        dispatch(msg, handler, cancelledRef);
+                        dispatch(msg, session.handler(), session.cancelled());
                     } finally {
-                        sem.release();
+                        session.sem().release();
                     }
                 });
             }
 
             @Override
             public void onError(final Throwable t) {
-                if (cancelledRef.get()) {
+                if (session.cancelled().get()) {
                     return;
                 }
-                final Duration current = backoff.get();
+                final Duration current = session.backoff().get();
                 logger.warning("queue-ti consumer: stream error on topic '" + topic
                         + "', reconnecting in " + current.toMillis() + "ms: " + t);
-                scheduleConnect(current, cancelledRef, sem, executor, scheduler,
-                                doneLatch, backoff, handler);
-                backoff.set(nextBackoff(current));
+                scheduleConnect(current, session);
+                session.backoff().set(nextBackoff(current));
             }
 
             @Override
             public void onCompleted() {
-                if (cancelledRef.get()) {
+                if (session.cancelled().get()) {
                     return;
                 }
-                // Server closed cleanly — reconnect immediately and reset backoff.
-                backoff.set(BACKOFF_START);
-                scheduleConnect(Duration.ZERO, cancelledRef, sem, executor, scheduler,
-                                doneLatch, backoff, handler);
+                session.backoff().set(BACKOFF_START);
+                scheduleConnect(Duration.ZERO, session);
             }
         });
+    }
+
+    /** Builds a {@link Message} from a batch dequeue response, wiring ack/nack to track settlement. */
+    private Message buildBatchMessage(
+            final DequeueResponse raw,
+            final BatchOptions batchOptions,
+            final Set<String> ackedIds,
+            final Set<String> nackedIds) {
+        final String msgId = raw.getId();
+        final Supplier<CompletableFuture<Void>> ackFn = () -> {
+            ackedIds.add(msgId);
+            return toVoidFuture(futureStub.ack(AckRequest.newBuilder()
+                    .setId(msgId)
+                    .setConsumerGroup(batchOptions.getConsumerGroup())
+                    .build()));
+        };
+        final Function<String, CompletableFuture<Void>> nackFn = reason -> {
+            nackedIds.add(msgId);
+            return toVoidFuture(futureStub.nack(NackRequest.newBuilder()
+                    .setId(msgId)
+                    .setError(reason)
+                    .setConsumerGroup(batchOptions.getConsumerGroup())
+                    .build()));
+        };
+        return Message.fromDequeueResponse(raw, ackFn, nackFn);
     }
 
     /**
@@ -507,5 +426,22 @@ public final class Consumer {
     static Duration nextBackoff(final Duration current) {
         final Duration doubled = current.multipliedBy(2);
         return doubled.compareTo(BACKOFF_MAX) < 0 ? doubled : BACKOFF_MAX;
+    }
+
+    /** Bridges a {@link ListenableFuture} to a {@link CompletableFuture}{@code <Void>}. */
+    private static <T> CompletableFuture<Void> toVoidFuture(final ListenableFuture<T> lf) {
+        final CompletableFuture<Void> cf = new CompletableFuture<>();
+        lf.addListener(() -> {
+            try {
+                lf.get();
+                cf.complete(null);
+            } catch (ExecutionException e) {
+                cf.completeExceptionally(e.getCause());
+            } catch (InterruptedException e) {
+                Thread.currentThread().interrupt();
+                cf.completeExceptionally(e);
+            }
+        }, MoreExecutors.directExecutor());
+        return cf;
     }
 }
