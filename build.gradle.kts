@@ -2,6 +2,7 @@ import com.google.protobuf.gradle.id
 
 plugins {
     id("java")
+    id("maven-publish")
     id("com.google.protobuf") version "0.9.4"
 }
 
@@ -54,4 +55,12 @@ protobuf {
 
 tasks.test {
     useJUnitPlatform()
+}
+
+publishing {
+    publications {
+        create<MavenPublication>("mavenJava") {
+            from(components["java"])
+        }
+    }
 }

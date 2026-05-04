@@ -1,6 +1,6 @@
 # queue-ti Java Client
 
-A Java 21 gRPC client library for the [queue-ti](https://github.com/Joessst-Dev/queue-ti) message queue service.
+A Java 21 gRPC client library for the [queue-ti](https://github.com/Joessst-Dev/queue-ti) message queue service — a lightweight gRPC-based queue with at-least-once delivery, consumer groups, and visibility timeouts.
 
 ## Requirements
 
@@ -9,11 +9,21 @@ A Java 21 gRPC client library for the [queue-ti](https://github.com/Joessst-Dev/
 
 ## Installation
 
+The library is not yet published to Maven Central. Build and install it to your local Maven cache first:
+
+```bash
+git clone https://github.com/Joessst-Dev/queue-ti-java-client.git
+cd queue-ti-java-client
+./gradlew publishToMavenLocal
+```
+
+Then declare the dependency in your project:
+
 ### Gradle (Kotlin DSL)
 
 ```kotlin
 repositories {
-    mavenCentral()
+    mavenLocal()
 }
 
 dependencies {
@@ -25,7 +35,7 @@ dependencies {
 
 ```groovy
 repositories {
-    mavenCentral()
+    mavenLocal()
 }
 
 dependencies {
@@ -36,6 +46,13 @@ dependencies {
 ### Maven
 
 ```xml
+<repositories>
+    <repository>
+        <id>local</id>
+        <url>file://${user.home}/.m2/repository</url>
+    </repository>
+</repositories>
+
 <dependency>
     <groupId>de.joesst.dev</groupId>
     <artifactId>queue-ti-java-client</artifactId>
@@ -44,6 +61,12 @@ dependencies {
 ```
 
 ## Quick Start
+
+All examples assume the following import:
+
+```java
+import de.joesst.dev.queueti.*;
+```
 
 ### Connect to the server
 
@@ -54,15 +77,15 @@ try (var client = QueueTiClient.connect("localhost:50051",
 }
 ```
 
-For TLS, omit the `insecure(true)` call or set it to `false`.
+For TLS, omit `.insecure(true)` — TLS is negotiated automatically when not set.
+
+`QueueTiClient` implements `Closeable`. Always close it (or use try-with-resources) to stop the background token-refresher thread and drain in-flight RPCs cleanly.
 
 ### Publish a message
 
 ```java
 var producer = client.newProducer();
-CompletableFuture<String> future = producer.publish("my-topic", "Hello".getBytes());
-String messageId = future.get();
-System.out.println("Published as: " + messageId);
+String messageId = producer.publish("my-topic", "Hello".getBytes()).get();
 ```
 
 With metadata and routing key:
@@ -84,24 +107,30 @@ var consumer = client.newConsumer("my-topic",
     ConsumerOptions.builder().concurrency(5).consumerGroup("mygroup").build());
 
 consumer.consume(message -> {
-    System.out.println("Got: " + new String(message.payload()));
-    // Return normally to ack, throw to nack
-    return null;
+    process(message.payload());
+    return null;  // Void return type — null signals success (ack); throw any exception to nack
 });
 ```
 
-The `consume()` call blocks until the thread is interrupted. Each message is dispatched on a virtual thread; concurrency is bounded by the configured level. Automatic exponential-backoff reconnection (500ms–30s) handles stream failures.
+`consume()` blocks until the calling thread is interrupted. Messages are dispatched on virtual threads; concurrency is bounded by the configured level. Automatic exponential-backoff reconnection (500ms–30s) handles stream failures.
 
 ### Consume messages (batch polling)
 
 ```java
 consumer.consumeBatch(10, messages -> {
     for (var msg : messages) {
-        System.out.println("Processing: " + msg.id());
+        if (isPoisonPill(msg)) {
+            msg.nack("unprocessable").join();  // explicitly nack before returning
+        } else {
+            process(msg.payload());
+        }
     }
-    // All unacked messages are acked on return; throw to nack all
+    return null;  // any message not explicitly settled is auto-acked on normal return
+                  // throw an exception to nack all unsettled messages instead
 });
 ```
+
+Individual messages can be acked or nacked within the handler before it returns. On normal return, any message not yet explicitly settled is auto-acked. On throw, any message not yet nacked is nacked with the exception message as the reason.
 
 ## Configuration
 
@@ -110,7 +139,7 @@ consumer.consumeBatch(10, messages -> {
 | Field | Type | Default | Description |
 |-------|------|---------|-------------|
 | `insecure` | `boolean` | `false` | Use plaintext channel (no TLS) |
-| `token` | `String` | `null` | Static JWT to send on every request |
+| `token` | `String` | `null` | Initial JWT to send on every request |
 | `tokenRefresher` | `TokenRefresher` | `null` | Strategy to obtain fresh tokens dynamically |
 
 ### ConsumerOptions
@@ -128,23 +157,43 @@ consumer.consumeBatch(10, messages -> {
 | `metadata` | `Map<String, String>` | empty | Arbitrary key-value pairs attached to the message |
 | `key` | `String` | `null` | Optional routing key for partitioning |
 
+### BatchOptions
+
+`consumeBatch` accepts an optional `BatchOptions` argument to override per-call consumer group and visibility timeout independently of the `ConsumerOptions` set at construction:
+
+```java
+var batchOptions = BatchOptions.builder()
+    .consumerGroup("batch-group")
+    .visibilityTimeoutSeconds(30)
+    .build();
+consumer.consumeBatch(10, handler, batchOptions);
+```
+
+| Field | Type | Default | Description |
+|-------|------|---------|-------------|
+| `consumerGroup` | `String` | `""` | Consumer group name for this batch poll |
+| `visibilityTimeoutSeconds` | `Integer` | `null` | Visibility timeout for this batch poll; `null` uses server default |
+
 ## Token Refresh
 
-If you need dynamic token renewal (e.g., from OAuth2 or a token service), configure a `TokenRefresher`:
+If you need dynamic token renewal (e.g., from OAuth2 or a token service), configure a `TokenRefresher`. An initial `token` is required — the refresher is triggered by parsing the expiry of the current token, so without one it will never fire:
 
 ```java
 TokenRefresher refresher = () -> myAuthClient.fetchToken();  // returns CompletableFuture<String>
 
 var options = ConnectOptions.builder()
+    .token(initialJwt)           // required — the refresher won't fire without a parseable token
     .tokenRefresher(refresher)
     .build();
 
-var client = QueueTiClient.connect("localhost:50051", options);
+try (var client = QueueTiClient.connect("localhost:50051", options)) {
+    // ...
+}
 ```
 
-The client launches a background virtual thread that wakes 60 seconds before token expiry and calls your refresher. On failure, it retries with exponential backoff (5s–60s). The refresher has a 30-second timeout per call.
+The client launches a background virtual thread that wakes 60 seconds before token expiry and calls your refresher. On failure it retries with exponential backoff (5s–60s). Each refresh call has a 30-second timeout.
 
-You can also update the token manually:
+You can also update the token at any time:
 
 ```java
 client.setToken(newToken);
@@ -158,20 +207,20 @@ Every consumed message exposes:
 |-------|------|-------------|
 | `id()` | `String` | Unique server-assigned message ID |
 | `topic()` | `String` | Topic the message was published to |
-| `payload()` | `byte[]` | Raw message bytes (defensive copy) |
+| `payload()` | `byte[]` | Raw message bytes (defensive copy on each call) |
 | `metadata()` | `Map<String, String>` | Immutable metadata map |
-| `createdAt()` | `Instant` | Wall-clock enqueue time; `Instant.EPOCH` if not set |
-| `retryCount()` | `int` | Number of previous delivery attempts (0 on first try) |
-| `maxRetries()` | `OptionalInt` | Server-configured max retries (batch-only; empty for streaming) |
+| `createdAt()` | `Instant` | Wall-clock enqueue time; `Instant.EPOCH` if not set by server |
+| `retryCount()` | `int` | Number of previous delivery attempts (0 on first delivery) |
+| `maxRetries()` | `OptionalInt` | Server-configured max retries (batch polling only; empty for streaming) |
 
-Acknowledge or negative-acknowledge:
+Acknowledge or negative-acknowledge explicitly:
 
 ```java
 message.ack()                           // success
 message.nack("processing error")        // failure with reason
 ```
 
-Both return a `CompletableFuture<Void>` that completes when the server confirms.
+Both return `CompletableFuture<Void>` that completes when the server confirms.
 
 ## Building from Source
 
@@ -180,11 +229,11 @@ Both return a `CompletableFuture<Void>` that completes when the server confirms.
 ./gradlew test                          # tests only
 ./gradlew clean                         # remove build outputs
 ./gradlew generateProto                 # regenerate gRPC stubs from proto
+./gradlew publishToMavenLocal           # install to local Maven cache (~/.m2)
 ```
 
 Tests use JUnit 5 with an in-process gRPC server — no external server or mocks needed.
 
 ## Related
 
-- **queue-ti server**: https://github.com/Joessst-Dev/queue-ti
-- **Reference clients**: Go, Node.js, Python clients in the same repo demonstrate async patterns and edge-case handling.
+- **queue-ti server**: https://github.com/Joessst-Dev/queue-ti — the server implementation, proto schema, and reference clients in Go, Node.js, and Python
