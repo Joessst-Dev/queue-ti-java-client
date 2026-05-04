@@ -126,5 +126,7 @@ jobs:
           # Only mark as "latest" for stable releases; pre-releases must not
           # displace the current stable latest pointer.
           make_latest: ${{ steps.version.outputs.make_latest }}
+          # Update an existing release if the tag was already released (e.g. pipeline retry).
+          overwrite: true
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
