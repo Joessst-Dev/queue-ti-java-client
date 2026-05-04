@@ -105,14 +105,15 @@ jobs:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
           VERSION="${{ steps.version.outputs.version }}"
-          EXISTS=$(gh api \
-            "/users/${{ github.repository_owner }}/packages/maven/de.joesst.dev.queue-ti-java-client/versions" \
-            --jq ".[] | select(.name == \"$VERSION\") | .id" 2>/dev/null || echo "")
-          if [ -n "$EXISTS" ]; then
+          HTTP_CODE=$(curl -s -o /dev/null -w "%{http_code}" \
+            -H "Authorization: Bearer $GITHUB_TOKEN" \
+            "https://maven.pkg.github.com/Joessst-Dev/queue-ti-java-client/de/joesst/dev/queue-ti-java-client/${VERSION}/queue-ti-java-client-${VERSION}.jar")
+          if [ "$HTTP_CODE" = "200" ]; then
             echo "already_published=true" >> "$GITHUB_OUTPUT"
-            echo "Version $VERSION already in GitHub Packages — skipping publish."
+            echo "Version $VERSION already downloadable from GitHub Packages — skipping publish."
           else
             echo "already_published=false" >> "$GITHUB_OUTPUT"
+            echo "Version $VERSION not found (HTTP $HTTP_CODE) — will publish."
           fi
 
       - name: Publish to GitHub Packages
