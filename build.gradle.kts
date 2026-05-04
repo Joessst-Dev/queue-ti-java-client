@@ -7,7 +7,7 @@ plugins {
 }
 
 group = "de.joesst.dev"
-version = "1.0-SNAPSHOT"
+version = findProperty("releaseVersion")?.toString() ?: "1.0-SNAPSHOT"
 
 val grpcVersion = "1.68.0"
 val protobufVersion = "4.28.2"

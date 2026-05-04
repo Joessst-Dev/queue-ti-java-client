@@ -80,7 +80,7 @@ jobs:
       # Pass the derived version via -Pversion so the published artifact carries
       # the correct coordinates without touching build.gradle.kts.
       - name: Build and run tests
-        run: ./gradlew build -Pversion=${{ steps.version.outputs.version }}
+        run: ./gradlew build -PreleaseVersion=${{ steps.version.outputs.version }}
 
       # Upload the HTML test report on failure so it can be inspected from the
       # Actions UI without a local checkout.
@@ -96,7 +96,7 @@ jobs:
       # The publishing.repositories.maven block in build.gradle.kts reads
       # GITHUB_ACTOR and GITHUB_TOKEN from the environment.
       - name: Publish to GitHub Packages
-        run: ./gradlew publish -Pversion=${{ steps.version.outputs.version }}
+        run: ./gradlew publish -PreleaseVersion=${{ steps.version.outputs.version }}
         env:
           GITHUB_ACTOR: ${{ github.actor }}
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
