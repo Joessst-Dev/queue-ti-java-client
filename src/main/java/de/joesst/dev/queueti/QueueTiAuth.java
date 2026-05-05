@@ -1,5 +1,7 @@
 package de.joesst.dev.queueti;
 
+import com.google.gson.JsonObject;
+
 import java.io.IOException;
 import java.io.UncheckedIOException;
 import java.net.URI;
@@ -34,13 +36,15 @@ import java.util.concurrent.CompletableFuture;
  */
 public final class QueueTiAuth implements TokenRefresher {
 
+    private final HttpClient httpClient;
     private final String adminAddr;
     private final String username;
     private final String password;
     private volatile String token;
 
-    private QueueTiAuth(final String adminAddr, final String username, final String password,
-            final String token) {
+    private QueueTiAuth(final HttpClient httpClient, final String adminAddr,
+            final String username, final String password, final String token) {
+        this.httpClient = httpClient;
         this.adminAddr = adminAddr;
         this.username = username;
         this.password = password;
@@ -67,7 +71,7 @@ public final class QueueTiAuth implements TokenRefresher {
                 : adminAddr;
         final var http = HttpClient.newHttpClient();
         final var token = doLogin(http, normalised, username, password);
-        return new QueueTiAuth(normalised, username, password, token);
+        return new QueueTiAuth(http, normalised, username, password, token);
     }
 
     /**
@@ -90,12 +94,12 @@ public final class QueueTiAuth implements TokenRefresher {
      */
     @Override
     public CompletableFuture<String> refresh() {
+        if (token == null) {
+            return CompletableFuture.completedFuture(null);
+        }
         return CompletableFuture.supplyAsync(() -> {
-            final var http = HttpClient.newHttpClient();
-            final var newToken = doLogin(http, adminAddr, username, password);
-            if (newToken != null) {
-                token = newToken;
-            }
+            final var newToken = fetchToken(httpClient, adminAddr, username, password);
+            token = newToken;
             return newToken;
         });
     }
@@ -131,10 +135,12 @@ public final class QueueTiAuth implements TokenRefresher {
 
     private static String fetchToken(final HttpClient http, final String adminAddr,
             final String username, final String password) {
-        final var body = "{\"username\":\"" + username + "\",\"password\":\"" + password + "\"}";
+        final var bodyObj = new JsonObject();
+        bodyObj.addProperty("username", username);
+        bodyObj.addProperty("password", password);
         final var request = HttpRequest.newBuilder()
                 .uri(URI.create(adminAddr + "/api/auth/login"))
-                .POST(HttpRequest.BodyPublishers.ofString(body))
+                .POST(HttpRequest.BodyPublishers.ofString(bodyObj.toString()))
                 .header("Content-Type", "application/json")
                 .build();
         final HttpResponse<String> response;

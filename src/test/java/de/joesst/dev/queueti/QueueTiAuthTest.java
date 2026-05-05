@@ -170,6 +170,31 @@ class QueueTiAuthTest {
         assertThat(auth.token()).isEqualTo("second-token");
     }
 
+    @Test
+    @DisplayName("refresh is a no-op when auth is not required")
+    void refresh_authNotRequired_noOp() throws Exception {
+        server.statusBody = "{\"auth_required\":false}";
+        final var auth = QueueTiAuth.login(server.baseUrl(), "admin", "secret");
+
+        final var result = auth.refresh().get();
+
+        assertThat(result).isNull();
+        assertThat(auth.token()).isNull();
+    }
+
+    @Test
+    @DisplayName("refresh completes exceptionally when server returns non-200")
+    void refresh_serverError_completesExceptionally() {
+        final var auth = QueueTiAuth.login(server.baseUrl(), "admin", "secret");
+        server.loginStatus = 401;
+        server.loginBody   = "{\"error\":\"invalid credentials\"}";
+
+        assertThatThrownBy(() -> auth.refresh().get())
+                .cause()
+                .isInstanceOf(UncheckedIOException.class)
+                .hasMessageContaining("login failed (HTTP 401)");
+    }
+
     // -------------------------------------------------------------------------
     // Tolerates trailing slash in adminAddr
     // -------------------------------------------------------------------------
