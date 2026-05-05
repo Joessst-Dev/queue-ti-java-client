@@ -2,11 +2,6 @@ package de.joesst.dev.queueti.examples.orderpipeline;
 
 import de.joesst.dev.queueti.*;
 
-import java.io.IOException;
-import java.net.URI;
-import java.net.http.HttpClient;
-import java.net.http.HttpRequest;
-import java.net.http.HttpResponse;
 import java.nio.charset.StandardCharsets;
 import java.util.ArrayList;
 import java.util.List;
@@ -31,8 +26,6 @@ public final class OrderPipeline {
     private static final String TOPIC          = "orders";
     private static final String DLQ_TOPIC      = "orders.dlq";
     private static final String CONSUMER_GROUP = "fulfillment";
-
-    // Default credentials shipped with the local docker-compose setup.
     private static final String DEFAULT_USERNAME = "admin";
     private static final String DEFAULT_PASSWORD = "secret";
 
@@ -55,16 +48,16 @@ public final class OrderPipeline {
             try { mainThread.join(5_000); } catch (InterruptedException ignored) {}
         }));
 
-        final var token = login();
+        final var auth = QueueTiAuth.login(ADMIN_ADDR, DEFAULT_USERNAME, DEFAULT_PASSWORD);
 
         final var connectOptions = ConnectOptions.builder().insecure(true);
-        if (token != null) {
-            connectOptions.token(token);
+        if (auth.token() != null) {
+            connectOptions.token(auth.token()).tokenRefresher(auth);
         }
 
         try (var client = QueueTiClient.connect(GRPC_ADDR, connectOptions.build())) {
 
-            registerConsumerGroup(token);
+            registerConsumerGroup(auth);
 
             // Produce in a background virtual thread so we can consume concurrently.
             Thread.ofVirtual().name("producer").start(() -> produce(client));
@@ -78,59 +71,12 @@ public final class OrderPipeline {
     }
 
     // -------------------------------------------------------------------------
-    // Auth
-    // -------------------------------------------------------------------------
-
-    /**
-     * Checks whether the server requires authentication and, if so, logs in with
-     * the default docker-compose credentials to obtain a JWT.
-     *
-     * @return the JWT, or {@code null} if auth is disabled or login fails
-     */
-    private static String login() throws IOException, InterruptedException {
-        var http = HttpClient.newHttpClient();
-
-        // Check if auth is required.
-        var statusReq = HttpRequest.newBuilder()
-                .uri(URI.create(ADMIN_ADDR + "/api/auth/status"))
-                .GET()
-                .build();
-        var statusResp = http.send(statusReq, HttpResponse.BodyHandlers.ofString());
-        if (!statusResp.body().contains("\"auth_required\":true")) {
-            log.info("auth not required — connecting without token");
-            return null;
-        }
-
-        // Log in with default credentials.
-        var body = "{\"username\":\"" + DEFAULT_USERNAME + "\",\"password\":\"" + DEFAULT_PASSWORD + "\"}";
-        var loginReq = HttpRequest.newBuilder()
-                .uri(URI.create(ADMIN_ADDR + "/api/auth/login"))
-                .POST(HttpRequest.BodyPublishers.ofString(body))
-                .header("Content-Type", "application/json")
-                .build();
-        var loginResp = http.send(loginReq, HttpResponse.BodyHandlers.ofString());
-        if (loginResp.statusCode() != 200) {
-            throw new RuntimeException("login failed (HTTP " + loginResp.statusCode() + "): " + loginResp.body());
-        }
-
-        // Extract token from {"token":"eyJ..."}
-        var raw = loginResp.body();
-        var start = raw.indexOf("\"token\":\"");
-        if (start < 0) throw new RuntimeException("unexpected login response: " + raw);
-        start += 9;
-        var end   = raw.indexOf("\"", start);
-        var token = raw.substring(start, end);
-        log.info("logged in as " + DEFAULT_USERNAME);
-        return token;
-    }
-
-    // -------------------------------------------------------------------------
     // Consumer group registration
     // -------------------------------------------------------------------------
 
-    private static void registerConsumerGroup(final String token) {
-        var opts = token != null
-                ? AdminOptions.builder().token(token).build()
+    private static void registerConsumerGroup(final QueueTiAuth auth) {
+        var opts = auth.token() != null
+                ? AdminOptions.builder().token(auth.token()).build()
                 : AdminOptions.defaults();
         var admin = AdminClient.connect(ADMIN_ADDR, opts);
         try {
