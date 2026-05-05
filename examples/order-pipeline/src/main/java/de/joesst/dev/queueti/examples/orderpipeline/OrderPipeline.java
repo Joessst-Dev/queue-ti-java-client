@@ -2,7 +2,13 @@ package de.joesst.dev.queueti.examples.orderpipeline;
 
 import de.joesst.dev.queueti.*;
 
+import java.io.IOException;
+import java.net.URI;
+import java.net.http.HttpClient;
+import java.net.http.HttpRequest;
+import java.net.http.HttpResponse;
 import java.nio.charset.StandardCharsets;
+import java.util.ArrayList;
 import java.util.List;
 import java.util.Map;
 import java.util.concurrent.CompletableFuture;
@@ -26,6 +32,10 @@ public final class OrderPipeline {
     private static final String DLQ_TOPIC      = "orders.dlq";
     private static final String CONSUMER_GROUP = "fulfillment";
 
+    // Default credentials shipped with the local docker-compose setup.
+    private static final String DEFAULT_USERNAME = "admin";
+    private static final String DEFAULT_PASSWORD = "secret";
+
     private record Order(String id, String item, int amount, boolean poison) {
         byte[] toJsonBytes() {
             var json = "{\"id\":\"" + id + "\","
@@ -45,10 +55,16 @@ public final class OrderPipeline {
             try { mainThread.join(5_000); } catch (InterruptedException ignored) {}
         }));
 
-        try (var client = QueueTiClient.connect(GRPC_ADDR,
-                ConnectOptions.builder().insecure(true).build())) {
+        final var token = login();
 
-            registerConsumerGroup();
+        final var connectOptions = ConnectOptions.builder().insecure(true);
+        if (token != null) {
+            connectOptions.token(token);
+        }
+
+        try (var client = QueueTiClient.connect(GRPC_ADDR, connectOptions.build())) {
+
+            registerConsumerGroup(token);
 
             // Produce in a background virtual thread so we can consume concurrently.
             Thread.ofVirtual().name("producer").start(() -> produce(client));
@@ -62,11 +78,59 @@ public final class OrderPipeline {
     }
 
     // -------------------------------------------------------------------------
+    // Auth
+    // -------------------------------------------------------------------------
+
+    /**
+     * Checks whether the server requires authentication and, if so, logs in with
+     * the default docker-compose credentials to obtain a JWT.
+     *
+     * @return the JWT, or {@code null} if auth is disabled or login fails
+     */
+    private static String login() throws IOException, InterruptedException {
+        var http = HttpClient.newHttpClient();
+
+        // Check if auth is required.
+        var statusReq = HttpRequest.newBuilder()
+                .uri(URI.create(ADMIN_ADDR + "/api/auth/status"))
+                .GET()
+                .build();
+        var statusResp = http.send(statusReq, HttpResponse.BodyHandlers.ofString());
+        if (!statusResp.body().contains("\"auth_required\":true")) {
+            log.info("auth not required — connecting without token");
+            return null;
+        }
+
+        // Log in with default credentials.
+        var body = "{\"username\":\"" + DEFAULT_USERNAME + "\",\"password\":\"" + DEFAULT_PASSWORD + "\"}";
+        var loginReq = HttpRequest.newBuilder()
+                .uri(URI.create(ADMIN_ADDR + "/api/auth/login"))
+                .POST(HttpRequest.BodyPublishers.ofString(body))
+                .header("Content-Type", "application/json")
+                .build();
+        var loginResp = http.send(loginReq, HttpResponse.BodyHandlers.ofString());
+        if (loginResp.statusCode() != 200) {
+            throw new RuntimeException("login failed (HTTP " + loginResp.statusCode() + "): " + loginResp.body());
+        }
+
+        // Extract token from {"token":"eyJ..."}
+        var raw = loginResp.body();
+        var start = raw.indexOf("\"token\":\"") + 9;
+        var end   = raw.indexOf("\"", start);
+        var token = raw.substring(start, end);
+        log.info("logged in as " + DEFAULT_USERNAME);
+        return token;
+    }
+
+    // -------------------------------------------------------------------------
     // Consumer group registration
     // -------------------------------------------------------------------------
 
-    private static void registerConsumerGroup() {
-        var admin = AdminClient.connect(ADMIN_ADDR, AdminOptions.defaults());
+    private static void registerConsumerGroup(final String token) {
+        var opts = token != null
+                ? AdminOptions.builder().token(token).build()
+                : AdminOptions.defaults();
+        var admin = AdminClient.connect(ADMIN_ADDR, opts);
         try {
             admin.registerConsumerGroup(TOPIC, CONSUMER_GROUP);
             log.info("consumer group \"" + CONSUMER_GROUP + "\" registered");
@@ -89,7 +153,7 @@ public final class OrderPipeline {
                 new Order("ord-5", "Gadget D",  3, false)
         );
 
-        var futures = new java.util.ArrayList<CompletableFuture<?>>();
+        var futures = new ArrayList<CompletableFuture<?>>();
         for (var o : orders) {
             try {
                 TimeUnit.MILLISECONDS.sleep(500);
