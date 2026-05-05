@@ -35,3 +35,5 @@ Edit the constants at the top of `OrderPipeline.java` to point at a different se
 | `TOPIC` | `orders` | Topic to publish and consume |
 | `DLQ_TOPIC` | `orders.dlq` | Dead-letter queue topic |
 | `CONSUMER_GROUP` | `fulfillment` | Consumer group name |
+| `DEFAULT_USERNAME` | `admin` | Login username (docker-compose default) |
+| `DEFAULT_PASSWORD` | `secret` | Login password (docker-compose default) |

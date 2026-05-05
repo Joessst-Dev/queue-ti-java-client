@@ -115,7 +115,9 @@ public final class OrderPipeline {
 
         // Extract token from {"token":"eyJ..."}
         var raw = loginResp.body();
-        var start = raw.indexOf("\"token\":\"") + 9;
+        var start = raw.indexOf("\"token\":\"");
+        if (start < 0) throw new RuntimeException("unexpected login response: " + raw);
+        start += 9;
         var end   = raw.indexOf("\"", start);
         var token = raw.substring(start, end);
         log.info("logged in as " + DEFAULT_USERNAME);
