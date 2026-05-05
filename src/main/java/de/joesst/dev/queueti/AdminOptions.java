@@ -82,12 +82,12 @@ public final class AdminOptions {
          *
          * @param requestTimeout the timeout; must not be {@code null} or negative
          * @return this builder
-         * @throws IllegalArgumentException if {@code requestTimeout} is null or negative
+         * @throws IllegalArgumentException if {@code requestTimeout} is null, negative, or zero
          */
         public Builder requestTimeout(final Duration requestTimeout) {
-            if (requestTimeout == null || requestTimeout.isNegative()) {
+            if (requestTimeout == null || requestTimeout.isNegative() || requestTimeout.isZero()) {
                 throw new IllegalArgumentException(
-                        "requestTimeout must be non-null and non-negative");
+                        "requestTimeout must be non-null and positive");
             }
             this.requestTimeout = requestTimeout;
             return this;

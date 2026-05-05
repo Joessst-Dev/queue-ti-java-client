@@ -10,7 +10,6 @@ import java.io.IOException;
 import java.io.OutputStream;
 import java.net.InetSocketAddress;
 import java.nio.charset.StandardCharsets;
-import java.util.ArrayList;
 import java.util.List;
 import java.util.concurrent.atomic.AtomicReference;
 
@@ -133,7 +132,7 @@ class AdminClientTest {
         // Given
         fakeServer.willRespondWith(200,
                 "{\"topic\":\"orders\",\"replayable\":false}");
-        final var config = new TopicConfig("orders", null, null, null, false, null, null);
+        final var config = new TopicConfig("orders", false, null, null, null, null, null);
 
         // When
         final var result = adminClient.upsertTopicConfig("orders", config);
@@ -150,7 +149,7 @@ class AdminClientTest {
     void upsertTopicConfig_omits_null_fields() {
         // Given
         fakeServer.willRespondWith(200, "{\"topic\":\"t\",\"replayable\":false}");
-        final var config = new TopicConfig("t", null, null, null, false, null, null);
+        final var config = new TopicConfig("t", false, null, null, null, null, null);
 
         // When
         adminClient.upsertTopicConfig("t", config);
@@ -171,7 +170,7 @@ class AdminClientTest {
     void upsertTopicConfig_includes_non_null_fields() {
         // Given
         fakeServer.willRespondWith(200, "{\"topic\":\"t\",\"replayable\":true,\"max_retries\":5}");
-        final var config = new TopicConfig("t", 5, 3600, 1000, true, 86400, 100);
+        final var config = new TopicConfig("t", true, 5, 3600, 1000, 86400, 100);
 
         // When
         adminClient.upsertTopicConfig("t", config);

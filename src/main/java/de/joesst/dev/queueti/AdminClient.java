@@ -1,6 +1,7 @@
 package de.joesst.dev.queueti;
 
 import com.google.gson.FieldNamingPolicy;
+import com.google.gson.Gson;
 import com.google.gson.GsonBuilder;
 import com.google.gson.JsonObject;
 import com.google.gson.reflect.TypeToken;
@@ -8,9 +9,11 @@ import com.google.gson.reflect.TypeToken;
 import java.io.IOException;
 import java.io.UncheckedIOException;
 import java.net.URI;
+import java.net.URLEncoder;
 import java.net.http.HttpClient;
 import java.net.http.HttpRequest;
 import java.net.http.HttpResponse;
+import java.nio.charset.StandardCharsets;
 import java.util.List;
 
 /**
@@ -29,7 +32,7 @@ import java.util.List;
  */
 public final class AdminClient {
 
-    private static final com.google.gson.Gson GSON = new GsonBuilder()
+    private static final Gson GSON = new GsonBuilder()
             .setFieldNamingPolicy(FieldNamingPolicy.LOWER_CASE_WITH_UNDERSCORES)
             .create();
 
@@ -60,6 +63,7 @@ public final class AdminClient {
         if (options == null) {
             throw new IllegalArgumentException("options must not be null");
         }
+        // connectTimeout bounds the TCP handshake; per-request timeout is set on each HttpRequest.
         final var httpClient = HttpClient.newBuilder()
                 .connectTimeout(options.getRequestTimeout())
                 .build();
@@ -325,6 +329,6 @@ public final class AdminClient {
     }
 
     private static String encode(final String segment) {
-        return segment.replace(" ", "%20");
+        return URLEncoder.encode(segment, StandardCharsets.UTF_8).replace("+", "%20");
     }
 }
