@@ -5,6 +5,7 @@ import de.joesst.dev.queueti.*;
 import java.nio.charset.StandardCharsets;
 import java.util.List;
 import java.util.Map;
+import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.TimeUnit;
 import java.util.logging.Logger;
 
@@ -19,16 +20,31 @@ public final class OrderPipeline {
 
     private static final Logger log = Logger.getLogger(OrderPipeline.class.getName());
 
-    private static final String GRPC_ADDR     = "localhost:50051";
-    private static final String ADMIN_ADDR    = "http://localhost:8080";
-    private static final String TOPIC         = "orders";
-    private static final String DLQ_TOPIC     = "orders.dlq";
+    private static final String GRPC_ADDR      = "localhost:50051";
+    private static final String ADMIN_ADDR     = "http://localhost:8080";
+    private static final String TOPIC          = "orders";
+    private static final String DLQ_TOPIC      = "orders.dlq";
     private static final String CONSUMER_GROUP = "fulfillment";
 
-    // Payload for the poison-pill order that will be nacked and dead-lettered.
-    private static final String POISON_MARKER = "POISON";
+    private record Order(String id, String item, int amount, boolean poison) {
+        byte[] toJsonBytes() {
+            var json = "{\"id\":\"" + id + "\","
+                    + "\"item\":\"" + item + "\","
+                    + "\"amount\":" + amount + ","
+                    + "\"poison\":" + poison + "}";
+            return json.getBytes(StandardCharsets.UTF_8);
+        }
+    }
 
     public static void main(final String[] args) throws Exception {
+        final var mainThread = Thread.currentThread();
+        // Interrupt the main thread on Ctrl-C so consume() unblocks and
+        // the try-with-resources close() drains in-flight RPCs cleanly.
+        Runtime.getRuntime().addShutdownHook(Thread.ofVirtual().unstarted(() -> {
+            mainThread.interrupt();
+            try { mainThread.join(5_000); } catch (InterruptedException ignored) {}
+        }));
+
         try (var client = QueueTiClient.connect(GRPC_ADDR,
                 ConnectOptions.builder().insecure(true).build())) {
 
@@ -40,7 +56,7 @@ public final class OrderPipeline {
             // Drain the DLQ in a background virtual thread.
             Thread.ofVirtual().name("dlq-drainer").start(() -> drainDlq(client));
 
-            // Blocking consume — exits on interrupt (Ctrl-C).
+            // Blocking consume — exits when the main thread is interrupted (Ctrl-C).
             consume(client);
         }
     }
@@ -66,13 +82,14 @@ public final class OrderPipeline {
     private static void produce(final QueueTiClient client) {
         var producer = client.newProducer();
         var orders = List.of(
-                order("ord-1", "Widget A",  2, false),
-                order("ord-2", "Gadget B",  1, false),
-                order("ord-3", POISON_MARKER, 0, true),
-                order("ord-4", "Widget C",  5, false),
-                order("ord-5", "Gadget D",  3, false)
+                new Order("ord-1", "Widget A",  2, false),
+                new Order("ord-2", "Gadget B",  1, false),
+                new Order("ord-3", "poison",    0, true),
+                new Order("ord-4", "Widget C",  5, false),
+                new Order("ord-5", "Gadget D",  3, false)
         );
 
+        var futures = new java.util.ArrayList<CompletableFuture<?>>();
         for (var o : orders) {
             try {
                 TimeUnit.MILLISECONDS.sleep(500);
@@ -82,12 +99,15 @@ public final class OrderPipeline {
             }
             var opts = PublishOptions.builder()
                     .metadata(Map.of("source", "order-pipeline"))
-                    .key((String) o[0])
+                    .key(o.id())
                     .build();
-            producer.publish(TOPIC, payload(o), opts)
-                    .thenAccept(id -> log.info("published " + o[0] + " → " + id))
+            var future = producer.publish(TOPIC, o.toJsonBytes(), opts)
+                    .thenAccept(id -> log.info("published " + o.id() + " → " + id))
                     .exceptionally(ex -> { log.warning("publish failed: " + ex.getMessage()); return null; });
+            futures.add(future);
         }
+        // Wait for all in-flight publishes to confirm before the thread exits.
+        CompletableFuture.allOf(futures.toArray(new CompletableFuture[0])).join();
     }
 
     // -------------------------------------------------------------------------
@@ -106,7 +126,8 @@ public final class OrderPipeline {
         consumer.consume(msg -> {
             var body = new String(msg.payload(), StandardCharsets.UTF_8);
 
-            if (body.contains(POISON_MARKER)) {
+            // Check the explicit poison flag in the JSON rather than searching the full body.
+            if (body.contains("\"poison\":true")) {
                 log.warning("nack " + msg.id() + ": poison pill detected (retry " + msg.retryCount() + ")");
                 throw new RuntimeException("poison pill");
             }
@@ -134,23 +155,5 @@ public final class OrderPipeline {
             }
             return null; // auto-ack all
         });
-    }
-
-    // -------------------------------------------------------------------------
-    // Helpers
-    // -------------------------------------------------------------------------
-
-    /** Returns [id, item, amount, poison] as a simple Object array. */
-    private static Object[] order(final String id, final String item,
-                                   final int amount, final boolean poison) {
-        return new Object[]{id, item, amount, poison};
-    }
-
-    private static byte[] payload(final Object[] o) {
-        var json = "{\"id\":\"" + o[0] + "\","
-                + "\"item\":\"" + o[1] + "\","
-                + "\"amount\":" + o[2] + ","
-                + "\"poison\":" + o[3] + "}";
-        return json.getBytes(StandardCharsets.UTF_8);
     }
 }
