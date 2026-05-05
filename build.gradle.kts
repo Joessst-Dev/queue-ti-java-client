@@ -30,6 +30,7 @@ dependencies {
     implementation("com.google.protobuf:protobuf-java:$protobufVersion")
     implementation("com.google.protobuf:protobuf-java-util:$protobufVersion")
     implementation("com.google.guava:guava:33.3.1-jre")
+    implementation("com.google.code.gson:gson:2.11.0")
 
     compileOnly("org.apache.tomcat:annotations-api:6.0.53")
 
