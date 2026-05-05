@@ -271,9 +271,13 @@ Both return `CompletableFuture<Void>` that completes when the server confirms.
 
 ## Admin Client
 
-`AdminClient` manages topics, schemas, consumer groups, and server stats via the queue-ti HTTP admin API (default port 8080). It is separate from `QueueTiClient` so queue-only consumers carry no extra dependency surface.
+`AdminClient` manages topics, schemas, consumer groups, and server stats via the queue-ti HTTP admin API. It is separate from `QueueTiClient` so queue-only consumers carry no extra dependency surface.
 
 ```java
+// No auth (local / dev)
+var admin = AdminClient.connect("http://localhost:8080", AdminOptions.defaults());
+
+// With bearer token
 var admin = AdminClient.connect("http://localhost:8080",
         AdminOptions.builder().token("eyJ...").build());
 ```
@@ -304,6 +308,13 @@ TopicSchema schema = admin.getTopicSchema("orders");   // throws NotFoundExcepti
 admin.upsertTopicSchema("orders", "{\"type\":\"string\"}");
 admin.deleteTopicSchema("orders");
 ```
+
+| Field | Type | Description |
+|-------|------|-------------|
+| `topic` | `String` | Topic name |
+| `schemaJson` | `String` | The JSON Schema document |
+| `version` | `int` | Schema version number |
+| `updatedAt` | `String` | ISO-8601 timestamp of the last update |
 
 ### Consumer groups
 
