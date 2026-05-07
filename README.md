@@ -580,7 +580,6 @@ The adapter acks when downstream processing returns normally; any uncaught excep
 
 ```java
 var adapter = new QueueTiInboundChannelAdapter(client, "orders");
-adapter.setAcknowledgeMode(AcknowledgeMode.AUTO);
 adapter.setOutputChannel(myChannel);
 ```
 
@@ -590,7 +589,7 @@ The adapter adds a `QueueTiAcknowledgment` to the message headers. Downstream co
 
 ```java
 var adapter = new QueueTiInboundChannelAdapter(client, "orders");
-adapter.setAcknowledgeMode(AcknowledgeMode.MANUAL);
+adapter.setAcknowledgeMode(QueueTiInboundChannelAdapter.AcknowledgeMode.MANUAL);
 adapter.setSettlementTimeout(Duration.ofSeconds(60));
 adapter.setOutputChannel(myChannel);
 ```
@@ -602,10 +601,10 @@ var ack = (QueueTiAcknowledgment) message.getHeaders()
         .get(QueueTiMessageHeaders.ACKNOWLEDGMENT);
 
 try {
-    process(message.getPayload());
+    process((byte[]) message.getPayload());
     ack.acknowledge();
 } catch (Exception e) {
-    ack.nack(e.getMessage());
+    ack.nack(e.getMessage() != null ? e.getMessage() : e.getClass().getSimpleName());
 }
 ```
 
