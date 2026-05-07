@@ -70,6 +70,7 @@ jobs:
           path: |
             build/reports/tests/
             spring-boot-starter/build/reports/tests/
+            spring-integration/build/reports/tests/
           retention-days: 7
 
       - name: Upload JAR artifacts
@@ -80,4 +81,5 @@ jobs:
           path: |
             build/libs/*.jar
             spring-boot-starter/build/libs/*.jar
+            spring-integration/build/libs/*.jar
           retention-days: 7
