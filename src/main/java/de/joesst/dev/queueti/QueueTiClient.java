@@ -2,7 +2,12 @@ package de.joesst.dev.queueti;
 
 import de.joesst.dev.queueti.pb.QueueServiceGrpc;
 import io.grpc.ManagedChannel;
+import io.grpc.netty.shaded.io.grpc.netty.GrpcSslContexts;
 import io.grpc.netty.shaded.io.grpc.netty.NettyChannelBuilder;
+import io.grpc.netty.shaded.io.netty.handler.ssl.SslContext;
+
+import javax.net.ssl.SSLException;
+import java.io.ByteArrayInputStream;
 
 import java.io.Closeable;
 import java.time.Duration;
@@ -88,6 +93,12 @@ public final class QueueTiClient implements Closeable {
         final var builder = NettyChannelBuilder.forAddress(addr.host(), addr.port());
         if (options.isInsecure()) {
             builder.usePlaintext();
+        } else if (options.getTlsOptions() != null) {
+            final var tls = options.getTlsOptions();
+            builder.sslContext(buildSslContext(tls));
+            if (tls.getServerNameOverride() != null) {
+                builder.overrideAuthority(tls.getServerNameOverride());
+            }
         }
         final ManagedChannel channel = builder.build();
 
@@ -287,6 +298,25 @@ public final class QueueTiClient implements Closeable {
         } catch (InterruptedException e) {
             Thread.currentThread().interrupt();
             return false;
+        }
+    }
+
+    private static SslContext buildSslContext(final TlsOptions tls) {
+        try {
+            final var sslBuilder = GrpcSslContexts.forClient();
+            final byte[] rootCerts = tls.getRootCertificates();
+            if (rootCerts != null) {
+                sslBuilder.trustManager(new ByteArrayInputStream(rootCerts));
+            }
+            final byte[] key  = tls.getPrivateKey();
+            final byte[] cert = tls.getCertificateChain();
+            if (key != null) {
+                sslBuilder.keyManager(new ByteArrayInputStream(cert),
+                        new ByteArrayInputStream(key));
+            }
+            return sslBuilder.build();
+        } catch (SSLException | IllegalArgumentException e) {
+            throw new IllegalArgumentException("failed to build SSL context: " + e.getMessage(), e);
         }
     }
 

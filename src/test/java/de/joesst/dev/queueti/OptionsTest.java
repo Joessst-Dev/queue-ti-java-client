@@ -20,6 +20,7 @@ class OptionsTest {
 
         // Then
         assertThat(opts.isInsecure()).isFalse();
+        assertThat(opts.getTlsOptions()).isNull();
         assertThat(opts.getToken()).isNull();
         assertThat(opts.getTokenRefresher()).isNull();
     }
@@ -129,6 +130,115 @@ class OptionsTest {
 
         // Then
         assertThat(opts.getVisibilityTimeoutSeconds()).isNull();
+    }
+
+    @Test
+    @DisplayName("ConnectOptions.builder() with tls sets tlsOptions and leaves insecure=false")
+    void connectOptions_tls_sets_tls_options() {
+        // Given
+        final var tls = TlsOptions.builder().serverNameOverride("my.server").build();
+
+        // When
+        final var opts = ConnectOptions.builder().tls(tls).build();
+
+        // Then
+        assertThat(opts.getTlsOptions()).isNotNull();
+        assertThat(opts.getTlsOptions().getServerNameOverride()).isEqualTo("my.server");
+        assertThat(opts.isInsecure()).isFalse();
+    }
+
+    @Test
+    @DisplayName("ConnectOptions.builder() with insecure=true and tls set throws")
+    void connectOptions_insecure_and_tls_throws() {
+        // Given
+        final var tls = TlsOptions.builder().build();
+        final var builder = ConnectOptions.builder().insecure(true).tls(tls);
+
+        // When / Then
+        assertThatThrownBy(builder::build)
+                .isInstanceOf(IllegalArgumentException.class)
+                .hasMessageContaining("mutually exclusive");
+    }
+
+    // ── TlsOptions ────────────────────────────────────────────────────────────
+
+    @Test
+    @DisplayName("TlsOptions.builder() defaults: all fields null")
+    void tlsOptions_defaults_all_null() {
+        // Given / When
+        final var opts = TlsOptions.builder().build();
+
+        // Then
+        assertThat(opts.getRootCertificates()).isNull();
+        assertThat(opts.getPrivateKey()).isNull();
+        assertThat(opts.getCertificateChain()).isNull();
+        assertThat(opts.getServerNameOverride()).isNull();
+    }
+
+    @Test
+    @DisplayName("TlsOptions.builder() sets all fields")
+    void tlsOptions_builder_sets_all_fields() {
+        // Given
+        final byte[] ca   = {1, 2, 3};
+        final byte[] key  = {4, 5, 6};
+        final byte[] cert = {7, 8, 9};
+
+        // When
+        final var opts = TlsOptions.builder()
+                .rootCertificates(ca)
+                .privateKey(key)
+                .certificateChain(cert)
+                .serverNameOverride("override.example")
+                .build();
+
+        // Then
+        assertThat(opts.getRootCertificates()).containsExactly(1, 2, 3);
+        assertThat(opts.getPrivateKey()).containsExactly(4, 5, 6);
+        assertThat(opts.getCertificateChain()).containsExactly(7, 8, 9);
+        assertThat(opts.getServerNameOverride()).isEqualTo("override.example");
+    }
+
+    @Test
+    @DisplayName("TlsOptions byte arrays are defensively copied on build and on get")
+    void tlsOptions_defensive_copy() {
+        // Given
+        final byte[] ca = {1, 2, 3};
+        final var opts = TlsOptions.builder().rootCertificates(ca).build();
+
+        // Mutate original after build
+        ca[0] = 99;
+
+        // Then — stored value must not change
+        assertThat(opts.getRootCertificates()).containsExactly(1, 2, 3);
+
+        // And getter must return an independent copy each time
+        final byte[] retrieved = opts.getRootCertificates();
+        retrieved[0] = 42;
+        assertThat(opts.getRootCertificates()).containsExactly(1, 2, 3);
+    }
+
+    @Test
+    @DisplayName("TlsOptions.builder() throws when only privateKey is set (mTLS requires both)")
+    void tlsOptions_only_private_key_throws() {
+        // Given
+        final var builder = TlsOptions.builder().privateKey(new byte[]{1});
+
+        // When / Then
+        assertThatThrownBy(builder::build)
+                .isInstanceOf(IllegalArgumentException.class)
+                .hasMessageContaining("both be set for mTLS");
+    }
+
+    @Test
+    @DisplayName("TlsOptions.builder() throws when only certificateChain is set")
+    void tlsOptions_only_certificate_chain_throws() {
+        // Given
+        final var builder = TlsOptions.builder().certificateChain(new byte[]{1});
+
+        // When / Then
+        assertThatThrownBy(builder::build)
+                .isInstanceOf(IllegalArgumentException.class)
+                .hasMessageContaining("both be set for mTLS");
     }
 
     @Test
