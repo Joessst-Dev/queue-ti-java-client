@@ -3,6 +3,7 @@ package de.joesst.dev.queueti.spring;
 import de.joesst.dev.queueti.TlsOptions;
 
 import java.io.IOException;
+import java.io.InputStream;
 
 /**
  * Converts {@link QueueTiProperties.TlsProperties} Spring {@code Resource} references into a
@@ -24,13 +25,19 @@ final class QueueTiTlsResourceLoader {
         final var builder = TlsOptions.builder();
 
         if (props.getRootCertificates() != null) {
-            builder.rootCertificates(props.getRootCertificates().getInputStream().readAllBytes());
+            try (InputStream in = props.getRootCertificates().getInputStream()) {
+                builder.rootCertificates(in.readAllBytes());
+            }
         }
         if (props.getPrivateKey() != null) {
-            builder.privateKey(props.getPrivateKey().getInputStream().readAllBytes());
+            try (InputStream in = props.getPrivateKey().getInputStream()) {
+                builder.privateKey(in.readAllBytes());
+            }
         }
         if (props.getCertificateChain() != null) {
-            builder.certificateChain(props.getCertificateChain().getInputStream().readAllBytes());
+            try (InputStream in = props.getCertificateChain().getInputStream()) {
+                builder.certificateChain(in.readAllBytes());
+            }
         }
         if (props.getServerNameOverride() != null) {
             builder.serverNameOverride(props.getServerNameOverride());

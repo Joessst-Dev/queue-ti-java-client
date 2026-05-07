@@ -19,7 +19,7 @@ import java.io.IOException;
 /**
  * Spring Boot auto-configuration for the queue-ti Java client.
  *
- * <p>Activated when {@code queueti.grpc-address} is present on the classpath. Creates the
+ * <p>Activated when {@code queueti.grpc-address} is present in the application configuration. Creates the
  * following beans depending on which properties are configured:
  *
  * <ul>
