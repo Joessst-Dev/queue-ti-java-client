@@ -94,10 +94,10 @@ public final class QueueTiClient implements Closeable {
         if (options.isInsecure()) {
             builder.usePlaintext();
         } else if (options.getTlsOptions() != null) {
-            builder.sslContext(buildSslContext(options.getTlsOptions()));
-            final String sni = options.getTlsOptions().getServerNameOverride();
-            if (sni != null) {
-                builder.overrideAuthority(sni);
+            final var tls = options.getTlsOptions();
+            builder.sslContext(buildSslContext(tls));
+            if (tls.getServerNameOverride() != null) {
+                builder.overrideAuthority(tls.getServerNameOverride());
             }
         }
         final ManagedChannel channel = builder.build();
@@ -304,16 +304,18 @@ public final class QueueTiClient implements Closeable {
     private static SslContext buildSslContext(final TlsOptions tls) {
         try {
             final var sslBuilder = GrpcSslContexts.forClient();
-            if (tls.getRootCertificates() != null) {
-                sslBuilder.trustManager(new ByteArrayInputStream(tls.getRootCertificates()));
+            final byte[] rootCerts = tls.getRootCertificates();
+            if (rootCerts != null) {
+                sslBuilder.trustManager(new ByteArrayInputStream(rootCerts));
             }
-            if (tls.getPrivateKey() != null && tls.getCertificateChain() != null) {
-                sslBuilder.keyManager(
-                        new ByteArrayInputStream(tls.getCertificateChain()),
-                        new ByteArrayInputStream(tls.getPrivateKey()));
+            final byte[] key  = tls.getPrivateKey();
+            final byte[] cert = tls.getCertificateChain();
+            if (key != null) {
+                sslBuilder.keyManager(new ByteArrayInputStream(cert),
+                        new ByteArrayInputStream(key));
             }
             return sslBuilder.build();
-        } catch (SSLException e) {
+        } catch (SSLException | IllegalArgumentException e) {
             throw new IllegalArgumentException("failed to build SSL context: " + e.getMessage(), e);
         }
     }

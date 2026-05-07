@@ -20,6 +20,7 @@ class OptionsTest {
 
         // Then
         assertThat(opts.isInsecure()).isFalse();
+        assertThat(opts.getTlsOptions()).isNull();
         assertThat(opts.getToken()).isNull();
         assertThat(opts.getTokenRefresher()).isNull();
     }

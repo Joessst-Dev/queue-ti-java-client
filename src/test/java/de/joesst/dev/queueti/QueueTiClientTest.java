@@ -19,6 +19,7 @@ import java.util.concurrent.TimeUnit;
 
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatNoException;
+import static org.assertj.core.api.Assertions.assertThatThrownBy;
 
 class QueueTiClientTest {
 
@@ -221,5 +222,24 @@ class QueueTiClientTest {
 
             assertThat(observed).isEqualTo("refreshed-token-value");
         }
+    }
+
+    // -------------------------------------------------------------------------
+    // TLS
+    // -------------------------------------------------------------------------
+
+    @Test
+    @DisplayName("connect() throws IllegalArgumentException when TlsOptions contains invalid PEM")
+    void connect_invalidPem_throwsIllegalArgumentException() {
+        // Given
+        final var tls = TlsOptions.builder()
+                .rootCertificates("not-valid-pem".getBytes(java.nio.charset.StandardCharsets.UTF_8))
+                .build();
+        final var options = ConnectOptions.builder().tls(tls).build();
+
+        // When / Then
+        assertThatThrownBy(() -> QueueTiClient.connect("localhost:50051", options))
+                .isInstanceOf(IllegalArgumentException.class)
+                .hasMessageContaining("failed to build SSL context");
     }
 }
