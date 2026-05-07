@@ -1,0 +1,7 @@
+queueti:
+  grpc-address: localhost:50051
+  insecure: true
+
+logging:
+  level:
+    de.joesst.dev: INFO
