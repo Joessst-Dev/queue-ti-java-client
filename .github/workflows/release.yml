@@ -103,8 +103,10 @@ jobs:
       # Treat 409 as "already published" so retries are idempotent.
       - name: Publish main artifact
         run: |
+          set +e
           OUT=$(./gradlew publish -PreleaseVersion=${{ steps.version.outputs.version }} 2>&1)
           EXIT=$?
+          set -e
           echo "$OUT"
           if [ $EXIT -ne 0 ] && echo "$OUT" | grep -q "409"; then
             echo "Main artifact already published (HTTP 409) — skipping."
@@ -117,8 +119,10 @@ jobs:
 
       - name: Publish Spring Boot starter artifact
         run: |
+          set +e
           OUT=$(./gradlew :spring-boot-starter:publish -PreleaseVersion=${{ steps.version.outputs.version }} 2>&1)
           EXIT=$?
+          set -e
           echo "$OUT"
           if [ $EXIT -ne 0 ] && echo "$OUT" | grep -q "409"; then
             echo "Spring Boot starter already published (HTTP 409) — skipping."
