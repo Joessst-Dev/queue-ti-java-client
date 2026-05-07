@@ -180,17 +180,6 @@ try (var client = QueueTiClient.connect("localhost:50051",
 }
 ```
 
-### TlsOptions
-
-| Field | Type | Default | Description |
-|-------|------|---------|-------------|
-| `rootCertificates` | `byte[]` | `null` | PEM CA cert(s) to trust; `null` uses JVM default trust store |
-| `privateKey` | `byte[]` | `null` | PEM client private key for mTLS |
-| `certificateChain` | `byte[]` | `null` | PEM client certificate chain for mTLS |
-| `serverNameOverride` | `String` | `null` | Override hostname for SNI and certificate verification |
-
-`privateKey` and `certificateChain` must be either both set (mTLS) or both `null`.
-
 ### Publish a message
 
 ```java
@@ -248,9 +237,19 @@ Individual messages can be acked or nacked within the handler before it returns.
 
 | Field | Type | Default | Description |
 |-------|------|---------|-------------|
-| `insecure` | `boolean` | `false` | Use plaintext channel (no TLS) |
+| `insecure` | `boolean` | `false` | Use plaintext channel (no TLS); mutually exclusive with `tls` |
+| `tls` | `TlsOptions` | `null` | Custom TLS config (CA, mTLS, SNI override); `null` uses system CAs; mutually exclusive with `insecure` |
 | `token` | `String` | `null` | Initial JWT to send on every request |
 | `tokenRefresher` | `TokenRefresher` | `null` | Strategy to obtain fresh tokens dynamically |
+
+### TlsOptions
+
+| Field | Type | Default | Description |
+|-------|------|---------|-------------|
+| `rootCertificates` | `byte[]` | `null` | PEM CA cert(s) to trust; `null` uses JVM default trust store |
+| `privateKey` | `byte[]` | `null` | PEM client private key for mTLS; must be paired with `certificateChain` |
+| `certificateChain` | `byte[]` | `null` | PEM client certificate chain for mTLS; must be paired with `privateKey` |
+| `serverNameOverride` | `String` | `null` | Override hostname for SNI and certificate verification |
 
 ### ConsumerOptions
 
