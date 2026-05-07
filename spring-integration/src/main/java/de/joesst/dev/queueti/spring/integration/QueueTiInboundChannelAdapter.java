@@ -2,9 +2,9 @@ package de.joesst.dev.queueti.spring.integration;
 
 import de.joesst.dev.queueti.Consumer;
 import de.joesst.dev.queueti.ConsumerOptions;
-import de.joesst.dev.queueti.Message;
 import de.joesst.dev.queueti.QueueTiClient;
 import org.springframework.integration.endpoint.MessageProducerSupport;
+import org.springframework.messaging.Message;
 import org.springframework.messaging.support.MessageBuilder;
 
 import java.time.Duration;
@@ -16,7 +16,7 @@ import static java.util.concurrent.TimeUnit.MILLISECONDS;
 
 /**
  * Spring Integration inbound channel adapter that consumes messages from a queue-ti topic
- * and publishes them as Spring Integration {@link org.springframework.messaging.Message}s.
+ * and publishes them as Spring Integration {@link Message}s.
  *
  * <p>Extends {@link MessageProducerSupport}, which implements {@link org.springframework.context.SmartLifecycle}.
  * Spring calls {@link #doStart()}/{@link #doStop()} automatically when the application
@@ -43,12 +43,14 @@ public final class QueueTiInboundChannelAdapter extends MessageProducerSupport {
 
     public enum AcknowledgeMode { AUTO, MANUAL }
 
+    private static final long STOP_JOIN_TIMEOUT_MS = 5_000;
+
     private final QueueTiClient client;
     private final String topic;
     private final ConsumerOptions consumerOptions;
 
-    private AcknowledgeMode acknowledgeMode = AcknowledgeMode.AUTO;
-    private Duration settlementTimeout = Duration.ofSeconds(30);
+    private volatile AcknowledgeMode acknowledgeMode = AcknowledgeMode.AUTO;
+    private volatile Duration settlementTimeout = Duration.ofSeconds(30);
 
     private volatile Thread consumerThread;
 
@@ -93,26 +95,26 @@ public final class QueueTiInboundChannelAdapter extends MessageProducerSupport {
         if (t != null) {
             t.interrupt();
             try {
-                t.join(5_000);
+                t.join(STOP_JOIN_TIMEOUT_MS);
             } catch (InterruptedException e) {
                 Thread.currentThread().interrupt();
             }
         }
     }
 
-    private Void handle(final Message msg) {
+    private Void handle(final de.joesst.dev.queueti.Message msg) {
         if (acknowledgeMode == AcknowledgeMode.MANUAL) {
             return handleManual(msg);
         }
         return handleAuto(msg);
     }
 
-    private Void handleAuto(final Message msg) {
+    private Void handleAuto(final de.joesst.dev.queueti.Message msg) {
         sendMessage(buildSpringMessage(msg, null));
         return null;
     }
 
-    private Void handleManual(final Message msg) {
+    private Void handleManual(final de.joesst.dev.queueti.Message msg) {
         final CompletableFuture<Void> settled = new CompletableFuture<>();
         final QueueTiAcknowledgment ack = new QueueTiAcknowledgment(settled);
 
@@ -127,7 +129,7 @@ public final class QueueTiInboundChannelAdapter extends MessageProducerSupport {
             settled.get(settlementTimeout.toMillis(), MILLISECONDS);
             return null;
         } catch (final ExecutionException e) {
-            throw new RuntimeException(e.getCause().getMessage());
+            throw new RuntimeException(e.getCause().getMessage(), e.getCause());
         } catch (final TimeoutException e) {
             throw new RuntimeException("Settlement timeout after " + settlementTimeout);
         } catch (final InterruptedException e) {
@@ -136,8 +138,8 @@ public final class QueueTiInboundChannelAdapter extends MessageProducerSupport {
         }
     }
 
-    private org.springframework.messaging.Message<byte[]> buildSpringMessage(
-            final Message msg,
+    private Message<byte[]> buildSpringMessage(
+            final de.joesst.dev.queueti.Message msg,
             final QueueTiAcknowledgment acknowledgment) {
         final MessageBuilder<byte[]> builder = MessageBuilder
                 .withPayload(msg.payload())

@@ -19,6 +19,7 @@ import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Test;
 import org.springframework.beans.factory.support.DefaultListableBeanFactory;
 import org.springframework.context.support.GenericApplicationContext;
+import org.springframework.integration.channel.DirectChannel;
 import org.springframework.integration.channel.QueueChannel;
 import org.springframework.messaging.Message;
 
@@ -99,6 +100,7 @@ class QueueTiInboundChannelAdapterTest {
     private FakeService fakeService;
     private QueueTiClient client;
     private GenericApplicationContext context;
+    private QueueTiInboundChannelAdapter adapter;
 
     private static SubscribeResponse sampleResponse() {
         return SubscribeResponse.newBuilder()
@@ -132,6 +134,7 @@ class QueueTiInboundChannelAdapterTest {
 
     @AfterEach
     void tearDown() throws Exception {
+        if (adapter != null && adapter.isRunning()) adapter.stop();
         context.close();
         client.close();
         server.shutdownNow();
@@ -140,8 +143,7 @@ class QueueTiInboundChannelAdapterTest {
 
     private QueueTiInboundChannelAdapter buildAdapter(
             final QueueTiInboundChannelAdapter.AcknowledgeMode mode) {
-        final QueueTiInboundChannelAdapter adapter =
-                new QueueTiInboundChannelAdapter(client, TOPIC);
+        adapter = new QueueTiInboundChannelAdapter(client, TOPIC);
         adapter.setAcknowledgeMode(mode);
         adapter.setBeanFactory(context.getBeanFactory());
         return adapter;
@@ -173,8 +175,6 @@ class QueueTiInboundChannelAdapterTest {
         assertThat(msg.getHeaders().get(QueueTiMessageHeaders.CREATED_AT))
                 .isInstanceOf(Instant.class);
         assertThat(msg.getHeaders().get(QueueTiMessageHeaders.ACKNOWLEDGMENT)).isNull();
-
-        adapter.stop();
     }
 
     @Test
@@ -193,8 +193,6 @@ class QueueTiInboundChannelAdapterTest {
         assertThat(acked).isTrue();
         assertThat(fakeService.capturedAcks).hasSize(1);
         assertThat(fakeService.capturedAcks.get(0).getId()).isEqualTo(MESSAGE_ID);
-
-        adapter.stop();
     }
 
     @Test
@@ -202,8 +200,7 @@ class QueueTiInboundChannelAdapterTest {
     void auto_downstreamExceptionSendsNack() throws InterruptedException {
         final QueueTiInboundChannelAdapter adapter =
                 buildAdapter(QueueTiInboundChannelAdapter.AcknowledgeMode.AUTO);
-        // Output channel that throws on receive simulation: use a channel that rejects messages
-        adapter.setOutputChannel(new org.springframework.integration.channel.DirectChannel() {
+        adapter.setOutputChannel(new DirectChannel() {
             @Override
             protected boolean doSend(final Message<?> message, final long timeout) {
                 throw new RuntimeException("downstream failure");
@@ -217,8 +214,6 @@ class QueueTiInboundChannelAdapterTest {
         assertThat(nacked).isTrue();
         assertThat(fakeService.capturedNacks).hasSize(1);
         assertThat(fakeService.capturedNacks.get(0).getId()).isEqualTo(MESSAGE_ID);
-
-        adapter.stop();
     }
 
     // =========================================================================
@@ -248,8 +243,6 @@ class QueueTiInboundChannelAdapterTest {
                 (QueueTiAcknowledgment) msg.getHeaders().get(QueueTiMessageHeaders.ACKNOWLEDGMENT);
         ack.acknowledge();
         fakeService.ackLatch.await(5, TimeUnit.SECONDS);
-
-        adapter.stop();
     }
 
     @Test
@@ -274,8 +267,6 @@ class QueueTiInboundChannelAdapterTest {
         assertThat(acked).isTrue();
         assertThat(fakeService.capturedAcks).hasSize(1);
         assertThat(fakeService.capturedAcks.get(0).getId()).isEqualTo(MESSAGE_ID);
-
-        adapter.stop();
     }
 
     @Test
@@ -301,8 +292,6 @@ class QueueTiInboundChannelAdapterTest {
         assertThat(fakeService.capturedNacks).hasSize(1);
         assertThat(fakeService.capturedNacks.get(0).getId()).isEqualTo(MESSAGE_ID);
         assertThat(fakeService.capturedNacks.get(0).getError()).isEqualTo("processing failed");
-
-        adapter.stop();
     }
 
     @Test
@@ -326,8 +315,6 @@ class QueueTiInboundChannelAdapterTest {
         assertThat(nacked).isTrue();
         assertThat(fakeService.capturedNacks).hasSize(1);
         assertThat(fakeService.capturedNacks.get(0).getId()).isEqualTo(MESSAGE_ID);
-
-        adapter.stop();
     }
 
     // =========================================================================

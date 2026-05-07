@@ -1,5 +1,6 @@
 package de.joesst.dev.queueti.spring.integration;
 
+import java.util.Objects;
 import java.util.concurrent.CompletableFuture;
 
 /**
@@ -26,6 +27,7 @@ public final class QueueTiAcknowledgment {
     }
 
     public void nack(final String reason) {
+        Objects.requireNonNull(reason, "reason");
         settlement.completeExceptionally(new RuntimeException(reason));
     }
 }
