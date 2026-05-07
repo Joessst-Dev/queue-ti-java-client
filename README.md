@@ -135,7 +135,7 @@ Use `TlsOptions` to configure custom CAs, mutual TLS, or server name override. `
 **Custom CA (self-signed server):**
 
 ```java
-byte[] caPem = Files.readAllBytes(Path.of("/path/to/ca.pem"));
+byte[] caPem = Files.readAllBytes(Path.of("ca.pem"));
 
 try (var client = QueueTiClient.connect("myserver:50051",
         ConnectOptions.builder()
@@ -169,6 +169,8 @@ try (var client = QueueTiClient.connect("myserver:50051",
 **Server name override** (certificate hostname does not match the dial address):
 
 ```java
+byte[] caPem = Files.readAllBytes(Path.of("ca.pem"));
+
 try (var client = QueueTiClient.connect("localhost:50051",
         ConnectOptions.builder()
                 .tls(TlsOptions.builder()
