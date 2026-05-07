@@ -92,52 +92,59 @@ jobs:
         uses: actions/upload-artifact@v4
         with:
           name: test-report
-          path: build/reports/tests/
+          path: |
+            build/reports/tests/
+            spring-boot-starter/build/reports/tests/
           retention-days: 7
 
       # ── Publish to GitHub Packages ────────────────────────────────────────
       # GitHub Packages Maven does not allow overwriting an existing version
-      # (HTTP 409). Skip the publish step if the version is already present so
-      # that pipeline retries don't fail here after a partial first run.
+      # (HTTP 409). Check each artifact independently so a partial-failure retry
+      # can publish only the missing artifact without re-hitting the existing one.
       - name: Check if version already published
         id: pkg_check
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
           VERSION="${{ steps.version.outputs.version }}"
-          HTTP_CODE=$(curl -s -o /dev/null -w "%{http_code}" \
+          BASE="https://maven.pkg.github.com/Joessst-Dev/queue-ti-java-client/de/joesst/dev"
+          CODE_MAIN=$(curl -s -o /dev/null -w "%{http_code}" \
             -H "Authorization: Bearer $GITHUB_TOKEN" \
-            "https://maven.pkg.github.com/Joessst-Dev/queue-ti-java-client/de/joesst/dev/queue-ti-java-client/${VERSION}/queue-ti-java-client-${VERSION}.jar")
-          if [ "$HTTP_CODE" = "200" ]; then
-            echo "already_published=true" >> "$GITHUB_OUTPUT"
-            echo "Version $VERSION already downloadable from GitHub Packages — skipping publish."
-          else
-            echo "already_published=false" >> "$GITHUB_OUTPUT"
-            echo "Version $VERSION not found (HTTP $HTTP_CODE) — will publish."
-          fi
+            "${BASE}/queue-ti-java-client/${VERSION}/queue-ti-java-client-${VERSION}.jar")
+          CODE_STARTER=$(curl -s -o /dev/null -w "%{http_code}" \
+            -H "Authorization: Bearer $GITHUB_TOKEN" \
+            "${BASE}/queue-ti-spring-boot-starter/${VERSION}/queue-ti-spring-boot-starter-${VERSION}.jar")
+          echo "Main: HTTP $CODE_MAIN  Starter: HTTP $CODE_STARTER"
+          [ "$CODE_MAIN"    = "200" ] && echo "main_published=true"    >> "$GITHUB_OUTPUT" \
+                                      || echo "main_published=false"   >> "$GITHUB_OUTPUT"
+          [ "$CODE_STARTER" = "200" ] && echo "starter_published=true" >> "$GITHUB_OUTPUT" \
+                                      || echo "starter_published=false" >> "$GITHUB_OUTPUT"
 
-      - name: Publish to GitHub Packages
-        if: steps.pkg_check.outputs.already_published == 'false'
+      - name: Publish main artifact
+        if: steps.pkg_check.outputs.main_published == 'false'
         run: ./gradlew publish -PreleaseVersion=${{ steps.version.outputs.version }}
         env:
           GITHUB_ACTOR: ${{ github.actor }}
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
 
-      # ── Upload JAR as workflow artifact ───────────────────────────────────
-      # Stash the built JAR so the release step can attach it as an asset.
-      # Using upload/download-artifact avoids globbing build/libs/ twice and
-      # makes the asset set explicit.
-      - name: Upload JAR artifact
+      - name: Publish Spring Boot starter artifact
+        if: steps.pkg_check.outputs.starter_published == 'false'
+        run: ./gradlew :spring-boot-starter:publish -PreleaseVersion=${{ steps.version.outputs.version }}
+        env:
+          GITHUB_ACTOR: ${{ github.actor }}
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+
+      # ── Upload JARs as workflow artifacts ─────────────────────────────────
+      - name: Upload JAR artifacts
         uses: actions/upload-artifact@v4
         with:
-          name: release-jar
-          path: build/libs/*.jar
-          # Retain long enough to cover any post-release investigation window.
+          name: release-jars
+          path: |
+            build/libs/*.jar
+            spring-boot-starter/build/libs/*.jar
           retention-days: 30
 
       # ── Create GitHub Release ─────────────────────────────────────────────
-      # Use gh CLI directly: create a fresh release, or edit + re-upload assets
-      # if the release already exists (idempotent on pipeline retries).
       - name: Create GitHub Release
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
@@ -157,10 +164,12 @@ jobs:
             gh release edit "$TAG" --title "$TAG" $PRERELEASE_FLAG $LATEST_FLAG \
               --generate-notes \
               --repo "${{ github.repository }}"
-            gh release upload "$TAG" build/libs/*.jar --clobber \
-              --repo "${{ github.repository }}"
+            gh release upload "$TAG" \
+              build/libs/*.jar spring-boot-starter/build/libs/*.jar \
+              --clobber --repo "${{ github.repository }}"
           else
-            gh release create "$TAG" build/libs/*.jar \
+            gh release create "$TAG" \
+              build/libs/*.jar spring-boot-starter/build/libs/*.jar \
               --title "$TAG" $PRERELEASE_FLAG $LATEST_FLAG \
               --generate-notes \
               --repo "${{ github.repository }}"

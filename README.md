@@ -423,6 +423,120 @@ List<TopicStat> stats = admin.stats();
 | `replayWindowSeconds` | `Integer` | Replay window in seconds; `null` = server default |
 | `throughputLimit` | `Integer` | Max messages per second; `null` = server default |
 
+## Spring Boot Starter
+
+The `queue-ti-spring-boot-starter` auto-configures `QueueTiClient`, `Producer`, `AdminClient`, and `QueueTiAuth` as Spring beans when `queueti.grpc-address` is present in application configuration. All beans use `@ConditionalOnMissingBean`, so user-defined beans override the auto-configuration. `QueueTiClient` implements `Closeable` — Spring calls `close()` automatically at context shutdown.
+
+### Installation
+
+Add the dependency from the same GitHub Packages repository (see [Installation](#installation) for credentials):
+
+**Gradle (Kotlin DSL)**
+
+```kotlin
+implementation("de.joesst.dev:queue-ti-spring-boot-starter:VERSION")
+```
+
+**Maven**
+
+```xml
+<dependency>
+    <groupId>de.joesst.dev</groupId>
+    <artifactId>queue-ti-spring-boot-starter</artifactId>
+    <version>VERSION</version>
+</dependency>
+```
+
+### Quick Start
+
+Minimal `application.yml`:
+
+```yaml
+queueti:
+  grpc-address: localhost:50051
+  insecure: true
+```
+
+Inject beans:
+
+```java
+@Service
+class OrderService {
+    private final Producer producer;
+
+    OrderService(Producer producer) {
+        this.producer = producer;
+    }
+
+    void publishOrder(Order order) throws Exception {
+        String messageId = producer.publish("orders", order.toBytes()).get();
+        // ...
+    }
+}
+```
+
+### Configuration Properties
+
+| Property | Default | Description |
+|----------|---------|-------------|
+| `queueti.grpc-address` | — | **Required.** gRPC server in `host:port` form |
+| `queueti.insecure` | `false` | Plaintext channel; mutually exclusive with `tls.*` |
+| `queueti.token` | `null` | Static JWT sent on every request; superseded by `auth.*` when both are set |
+| `queueti.tls.root-certificates` | `null` | Spring `Resource` path to PEM CA cert(s); `null` uses JVM default trust store |
+| `queueti.tls.private-key` | `null` | Spring `Resource` path to PEM client private key (mTLS) |
+| `queueti.tls.certificate-chain` | `null` | Spring `Resource` path to PEM client certificate chain (mTLS) |
+| `queueti.tls.server-name-override` | `null` | Override hostname for SNI and certificate verification |
+| `queueti.auth.admin-address` | `null` | HTTP base URL of the admin API; activates `QueueTiAuth` bean |
+| `queueti.auth.username` | `null` | Username for login; required when `auth.admin-address` is set |
+| `queueti.auth.password` | `null` | Password for login; required when `auth.admin-address` is set |
+| `queueti.admin.url` | `null` | HTTP base URL of the admin API; activates `AdminClient` bean |
+| `queueti.admin.request-timeout` | `30s` | Per-request HTTP timeout; accepts `10s`, `PT1M`, etc. |
+
+TLS paths support `classpath:`, `file:`, and environment-variable-expanded paths (e.g. `${CERT_DIR}/ca.pem`).
+
+### With Authentication
+
+The following configuration activates `QueueTiAuth`, wires the refreshed token into both `QueueTiClient` and `AdminClient`, and enables the admin bean:
+
+```yaml
+queueti:
+  grpc-address: myserver:50051
+  auth:
+    admin-address: http://myserver:8080
+    username: ${QUEUE_TI_USER}
+    password: ${QUEUE_TI_PASS}
+  admin:
+    url: http://myserver:8080
+```
+
+### With TLS
+
+```yaml
+queueti:
+  grpc-address: myserver:50051
+  tls:
+    root-certificates: classpath:ca.pem
+```
+
+### Known Limitations
+
+`AdminClient` receives its token at bean creation time and will not automatically pick up refreshed tokens. If tokens are short-lived, inject `QueueTiAuth` directly and re-create the admin client as needed.
+
+### Overriding a Bean
+
+Any user-defined `@Bean` for `QueueTiClient`, `Producer`, `AdminClient`, or `QueueTiAuth` causes the auto-configured counterpart to back off:
+
+```java
+@Configuration
+class QueueTiConfig {
+    @Bean
+    QueueTiClient queueTiClient() {
+        return QueueTiClient.connect("myserver:50051",
+            ConnectOptions.builder().insecure(true).build());
+    }
+}
+```
+
 ## Building from Source
 
 ```bash
