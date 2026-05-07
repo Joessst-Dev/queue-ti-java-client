@@ -11,11 +11,13 @@ package de.joesst.dev.queueti;
 public final class ConnectOptions {
 
     private final boolean insecure;
+    private final TlsOptions tlsOptions;
     private final String token;
     private final TokenRefresher tokenRefresher;
 
     private ConnectOptions(Builder builder) {
         this.insecure = builder.insecure;
+        this.tlsOptions = builder.tlsOptions;
         this.token = builder.token;
         this.tokenRefresher = builder.tokenRefresher;
     }
@@ -49,6 +51,16 @@ public final class ConnectOptions {
     }
 
     /**
+     * Returns the custom TLS configuration, or {@code null} to use TLS with the JVM default
+     * trust store.
+     *
+     * @return the {@link TlsOptions}, or {@code null}
+     */
+    public TlsOptions getTlsOptions() {
+        return tlsOptions;
+    }
+
+    /**
      * Returns the static JWT to send on every request, or {@code null} if none was set.
      *
      * @return the static token, or {@code null}
@@ -71,19 +83,33 @@ public final class ConnectOptions {
     public static final class Builder {
 
         private boolean insecure = false;
+        private TlsOptions tlsOptions = null;
         private String token = null;
         private TokenRefresher tokenRefresher = null;
 
         private Builder() {}
 
         /**
-         * Disables TLS verification when set to {@code true}.
+         * Disables TLS and uses a plaintext channel when set to {@code true}. Mutually exclusive
+         * with {@link #tls(TlsOptions)}.
          *
          * @param insecure {@code true} to use a plaintext channel
          * @return this builder
          */
         public Builder insecure(boolean insecure) {
             this.insecure = insecure;
+            return this;
+        }
+
+        /**
+         * Sets custom TLS configuration (custom CA, mTLS, server name override). Mutually
+         * exclusive with {@link #insecure(boolean)}.
+         *
+         * @param tlsOptions the TLS configuration; may be {@code null} to use system CAs
+         * @return this builder
+         */
+        public Builder tls(final TlsOptions tlsOptions) {
+            this.tlsOptions = tlsOptions;
             return this;
         }
 
@@ -113,8 +139,13 @@ public final class ConnectOptions {
          * Builds the {@link ConnectOptions}.
          *
          * @return a new immutable {@code ConnectOptions}
+         * @throws IllegalArgumentException if both {@code insecure} and {@code tls} are set
          */
         public ConnectOptions build() {
+            if (insecure && tlsOptions != null) {
+                throw new IllegalArgumentException(
+                        "insecure and tls are mutually exclusive — use one or the other");
+            }
             return new ConnectOptions(this);
         }
     }

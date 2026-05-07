@@ -124,9 +124,72 @@ try (var client = QueueTiClient.connect("localhost:50051",
 }
 ```
 
-For TLS, omit `.insecure(true)` — TLS is negotiated automatically when not set.
+For TLS with system CAs, omit both `.insecure(true)` and `.tls(...)` — the client uses TLS with the JVM's default trust store automatically.
 
 `QueueTiClient` implements `Closeable`. Always close it (or use try-with-resources) to stop the background token-refresher thread and drain in-flight RPCs cleanly.
+
+### TLS configuration
+
+Use `TlsOptions` to configure custom CAs, mutual TLS, or server name override. `TlsOptions` is mutually exclusive with `.insecure(true)`.
+
+**Custom CA (self-signed server):**
+
+```java
+byte[] caPem = Files.readAllBytes(Path.of("/path/to/ca.pem"));
+
+try (var client = QueueTiClient.connect("myserver:50051",
+        ConnectOptions.builder()
+                .tls(TlsOptions.builder()
+                        .rootCertificates(caPem)
+                        .build())
+                .build())) {
+    // ...
+}
+```
+
+**Mutual TLS (mTLS):**
+
+```java
+byte[] caPem   = Files.readAllBytes(Path.of("ca.pem"));
+byte[] keyPem  = Files.readAllBytes(Path.of("client-key.pem"));
+byte[] certPem = Files.readAllBytes(Path.of("client-cert.pem"));
+
+try (var client = QueueTiClient.connect("myserver:50051",
+        ConnectOptions.builder()
+                .tls(TlsOptions.builder()
+                        .rootCertificates(caPem)
+                        .privateKey(keyPem)
+                        .certificateChain(certPem)
+                        .build())
+                .build())) {
+    // ...
+}
+```
+
+**Server name override** (certificate hostname does not match the dial address):
+
+```java
+try (var client = QueueTiClient.connect("localhost:50051",
+        ConnectOptions.builder()
+                .tls(TlsOptions.builder()
+                        .rootCertificates(caPem)
+                        .serverNameOverride("myserver.internal")
+                        .build())
+                .build())) {
+    // ...
+}
+```
+
+### TlsOptions
+
+| Field | Type | Default | Description |
+|-------|------|---------|-------------|
+| `rootCertificates` | `byte[]` | `null` | PEM CA cert(s) to trust; `null` uses JVM default trust store |
+| `privateKey` | `byte[]` | `null` | PEM client private key for mTLS |
+| `certificateChain` | `byte[]` | `null` | PEM client certificate chain for mTLS |
+| `serverNameOverride` | `String` | `null` | Override hostname for SNI and certificate verification |
+
+`privateKey` and `certificateChain` must be either both set (mTLS) or both `null`.
 
 ### Publish a message
 
