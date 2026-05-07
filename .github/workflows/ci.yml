@@ -67,15 +67,17 @@ jobs:
         uses: actions/upload-artifact@v4
         with:
           name: test-report
-          path: build/reports/tests/
-          # Retain for 7 days — enough time to investigate a failing PR.
+          path: |
+            build/reports/tests/
+            spring-boot-starter/build/reports/tests/
           retention-days: 7
 
-      # Upload the compiled JAR only when the build succeeds.
-      - name: Upload JAR artifact
+      - name: Upload JAR artifacts
         if: success()
         uses: actions/upload-artifact@v4
         with:
-          name: queue-ti-java-client-jar
-          path: build/libs/
+          name: queue-ti-java-client-jars
+          path: |
+            build/libs/*.jar
+            spring-boot-starter/build/libs/*.jar
           retention-days: 7
