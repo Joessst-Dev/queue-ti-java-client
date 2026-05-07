@@ -1,5 +1,6 @@
 plugins {
     id("java")
+    // The version here and springBootVersion below must be kept in sync manually.
     id("org.springframework.boot") version "3.4.5"
 }
 

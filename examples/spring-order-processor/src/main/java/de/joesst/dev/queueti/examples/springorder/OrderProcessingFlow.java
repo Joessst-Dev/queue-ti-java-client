@@ -41,6 +41,9 @@ public class OrderProcessingFlow {
     QueueTiInboundChannelAdapter orderAdapter(
             final QueueTiClient client,
             final DirectChannel ordersChannel) {
+        // concurrency(3) spawns up to 3 virtual threads. DirectChannel dispatches each message
+        // synchronously on its receiving thread, so all 3 can process in parallel without
+        // an async executor channel.
         var adapter = new QueueTiInboundChannelAdapter(
                 client,
                 TOPIC,
@@ -60,6 +63,8 @@ public class OrderProcessingFlow {
                             headers.get(QueueTiMessageHeaders.ACKNOWLEDGMENT);
                     var id = headers.get(QueueTiMessageHeaders.MESSAGE_ID);
 
+                    // Simplified check that relies on the exact format produced by toJson().
+                    // A real application would deserialise the payload before inspecting fields.
                     if (payload.contains("\"poison\":true")) {
                         log.warning("Nacking poison pill " + id);
                         ack.nack("poison pill detected");
