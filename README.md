@@ -537,6 +537,110 @@ class QueueTiConfig {
 }
 ```
 
+## Spring Integration
+
+`queue-ti-spring-integration` provides a `QueueTiInboundChannelAdapter` — a `MessageProducerSupport`-based inbound channel adapter that consumes a queue-ti topic and publishes messages to a Spring Integration `MessageChannel`. It plugs directly into `IntegrationFlow` pipelines with no boilerplate consumer loop.
+
+### Installation
+
+Add the dependency from the same GitHub Packages repository (see [Installation](#installation) for credentials):
+
+**Gradle (Kotlin DSL)**
+
+```kotlin
+implementation("de.joesst.dev:queue-ti-spring-integration:VERSION")
+```
+
+**Maven**
+
+```xml
+<dependency>
+    <groupId>de.joesst.dev</groupId>
+    <artifactId>queue-ti-spring-integration</artifactId>
+    <version>VERSION</version>
+</dependency>
+```
+
+### Quick Start
+
+```java
+var adapter = new QueueTiInboundChannelAdapter(client, "orders");
+adapter.setOutputChannel(myChannel);
+adapter.afterPropertiesSet();
+adapter.start();
+```
+
+`QueueTiInboundChannelAdapter` implements `SmartLifecycle` — if you declare it as a Spring bean, the context will call `start()` and `stop()` automatically.
+
+### Acknowledge Modes
+
+#### AUTO (default)
+
+The adapter acks when downstream processing returns normally; any uncaught exception causes a nack. No extra code needed:
+
+```java
+var adapter = new QueueTiInboundChannelAdapter(client, "orders");
+adapter.setAcknowledgeMode(AcknowledgeMode.AUTO);
+adapter.setOutputChannel(myChannel);
+```
+
+#### MANUAL
+
+The adapter adds a `QueueTiAcknowledgment` to the message headers. Downstream code must call `ack.acknowledge()` or `ack.nack(reason)` to settle the message. Until settlement, the adapter's handler thread blocks — if settlement does not occur within the configured timeout (default: 30s), the message is nacked automatically.
+
+```java
+var adapter = new QueueTiInboundChannelAdapter(client, "orders");
+adapter.setAcknowledgeMode(AcknowledgeMode.MANUAL);
+adapter.setSettlementTimeout(Duration.ofSeconds(60));
+adapter.setOutputChannel(myChannel);
+```
+
+In a downstream handler:
+
+```java
+var ack = (QueueTiAcknowledgment) message.getHeaders()
+        .get(QueueTiMessageHeaders.ACKNOWLEDGMENT);
+
+try {
+    process(message.getPayload());
+    ack.acknowledge();
+} catch (Exception e) {
+    ack.nack(e.getMessage());
+}
+```
+
+### Message Headers
+
+Every Spring Integration message produced by the adapter carries the following headers:
+
+| Header constant | Key | Type | Present in |
+|-----------------|-----|------|------------|
+| `MESSAGE_ID` | `queueti_messageId` | `String` | AUTO + MANUAL |
+| `TOPIC` | `queueti_topic` | `String` | AUTO + MANUAL |
+| `RETRY_COUNT` | `queueti_retryCount` | `int` | AUTO + MANUAL |
+| `CREATED_AT` | `queueti_createdAt` | `Instant` | AUTO + MANUAL |
+| `METADATA` | `queueti_metadata` | `Map<String, String>` | AUTO + MANUAL |
+| `ACKNOWLEDGMENT` | `queueti_acknowledgment` | `QueueTiAcknowledgment` | MANUAL only |
+
+Use the constants in `QueueTiMessageHeaders` to avoid string literals:
+
+```java
+String id = (String) message.getHeaders().get(QueueTiMessageHeaders.MESSAGE_ID);
+```
+
+### Consumer Options
+
+Pass a `ConsumerOptions` instance to configure concurrency, consumer group, and visibility timeout:
+
+```java
+var options = ConsumerOptions.builder()
+        .concurrency(4)
+        .consumerGroup("billing")
+        .build();
+
+var adapter = new QueueTiInboundChannelAdapter(client, "orders", options);
+```
+
 ## Building from Source
 
 ```bash
