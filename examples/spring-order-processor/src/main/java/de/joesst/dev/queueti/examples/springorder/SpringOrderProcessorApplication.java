@@ -1,5 +1,7 @@
 package de.joesst.dev.queueti.examples.springorder;
 
+import de.joesst.dev.queueti.AdminClient;
+import de.joesst.dev.queueti.ConflictException;
 import de.joesst.dev.queueti.Producer;
 import de.joesst.dev.queueti.PublishOptions;
 import org.springframework.boot.ApplicationRunner;
@@ -10,6 +12,7 @@ import org.springframework.context.annotation.Bean;
 import java.nio.charset.StandardCharsets;
 import java.util.List;
 import java.util.Map;
+import java.util.concurrent.CountDownLatch;
 import java.util.logging.Logger;
 
 /**
@@ -35,9 +38,25 @@ public class SpringOrderProcessorApplication {
         SpringApplication.run(SpringOrderProcessorApplication.class, args);
     }
 
+    /** One count per order published — released by the flow as each is acked or nacked. */
     @Bean
-    ApplicationRunner publishOrders(final Producer producer) {
+    CountDownLatch orderLatch() {
+        return new CountDownLatch(5);
+    }
+
+    @Bean
+    ApplicationRunner publishOrders(
+            final AdminClient adminClient,
+            final Producer producer,
+            final CountDownLatch orderLatch) {
         return args -> {
+            try {
+                adminClient.registerConsumerGroup("orders", "fulfillment");
+                log.info("Consumer group \"fulfillment\" registered");
+            } catch (ConflictException e) {
+                log.info("Consumer group \"fulfillment\" already exists — continuing");
+            }
+
             var orders = List.of(
                     Map.of("id", "ord-1", "item", "Widget A",  "amount", "2",  "poison", "false"),
                     Map.of("id", "ord-2", "item", "Gadget B",  "amount", "1",  "poison", "false"),
@@ -52,11 +71,14 @@ public class SpringOrderProcessorApplication {
                 var json = toJson(order);
                 var opts = PublishOptions.builder()
                         .metadata(Map.of("source", "spring-order-processor"))
-                        .key(order.get("id"))
                         .build();
                 var messageId = producer.publish("orders", json.getBytes(StandardCharsets.UTF_8), opts).get();
                 log.info("Published " + order.get("id") + " → " + messageId);
             }
+
+            log.info("Waiting for all orders to be processed...");
+            orderLatch.await();
+            log.info("All orders processed — shutting down.");
         };
     }
 

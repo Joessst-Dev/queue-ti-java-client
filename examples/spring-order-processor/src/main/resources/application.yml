@@ -1,6 +1,16 @@
 queueti:
   grpc-address: localhost:50051
   insecure: true
+  auth:
+    admin-address: http://localhost:8080
+    username: admin
+    password: secret
+  admin:
+    url: http://localhost:8080
+
+spring:
+  main:
+    allow-bean-definition-overriding: true
 
 logging:
   level:

@@ -11,6 +11,7 @@ import org.springframework.integration.channel.DirectChannel;
 import org.springframework.integration.dsl.IntegrationFlow;
 
 import java.nio.charset.StandardCharsets;
+import java.util.concurrent.CountDownLatch;
 import java.util.logging.Logger;
 
 /**
@@ -54,7 +55,8 @@ public class OrderProcessingFlow {
     }
 
     @Bean
-    IntegrationFlow orderProcessingFlow(final DirectChannel ordersChannel) {
+    IntegrationFlow orderProcessingIntegrationFlow(
+            final DirectChannel ordersChannel, final CountDownLatch orderLatch) {
         return IntegrationFlow.from(ordersChannel)
                 .<byte[], String>transform(
                         payload -> new String(payload, StandardCharsets.UTF_8))
@@ -68,11 +70,12 @@ public class OrderProcessingFlow {
                     if (payload.contains("\"poison\":true")) {
                         log.warning("Nacking poison pill " + id);
                         ack.nack("poison pill detected");
-                        return null;
+                    } else {
+                        log.info("Fulfilling order " + id + ": " + payload);
+                        ack.acknowledge();
                     }
 
-                    log.info("Fulfilling order " + id + ": " + payload);
-                    ack.acknowledge();
+                    orderLatch.countDown();
                     return null;
                 })
                 .get();

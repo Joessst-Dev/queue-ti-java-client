@@ -111,7 +111,6 @@ public final class OrderPipeline {
             }
             var opts = PublishOptions.builder()
                     .metadata(Map.of("source", "order-pipeline"))
-                    .key(o.id())
                     .build();
             var future = producer.publish(TOPIC, o.toJsonBytes(), opts)
                     .thenAccept(id -> log.info("published " + o.id() + " → " + id))
